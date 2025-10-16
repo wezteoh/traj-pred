@@ -1,0 +1,87 @@
+# Minimal, fast debug run on CPU
+wandb:
+  project: relativetransformer-nba50
+  name: dryrun
+
+train:
+  seed: 0
+  validate_at_start: true
+  test: false
+  ckpt: null
+  ckpt_dir: ~/ckpt
+  monitor_metric: jade_min
+
+# Lightning Trainer
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 32-true
+  max_epochs: 100
+  fast_dev_run: false           # one batch train/val/test and exit
+  limit_train_batches: null       # safety; only a couple batches
+  limit_val_batches: null
+  limit_test_batches: null
+  log_every_n_steps: 1
+  enable_checkpointing: true
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  
+interface:
+  name: AutoregressiveMultiplePathPredictionInterface
+  diff_as_target: false
+  diff_in_input: false
+  data_mean: [45.0, 25.0]
+  data_std: [22.5, 12.5] # we get the data to the range of -2.0 to 2.0
+  loss_weights:
+    reg: 1.0
+    scene: 1.0
+  game: basketball
+  validation_prefix_length: 30
+  validation_max_length: 20
+  validation_num_paths: 10
+  num_id_to_upload: 3
+  num_paths_to_upload: 3
+  video_dir: ~/samples/nba50
+
+dataset:
+  name: TrajectoryDataModule
+  bsz: 192
+  num_workers: 0
+  data_dir: ~/data/traj/nba50
+
+# Small model for speed (used by CPU class after the code tweak below)
+model:
+  name: RelativeTransformer
+  args:
+    num_relative_transformer_blocks: 4
+    relative_transformer_block_config:
+      d_model: 64
+      d_mesh: 130
+      n_head: 4
+      d_ff: 128
+    motion_transformer_encoder_config:
+      pointnet_in_channels: 2
+      pointnet_hidden_dim: 64
+      pointnet_num_layers: 3
+      pointnet_num_pre_layers: 1
+      pointnet_out_channels: 64
+      entity_embedding_dim: 64
+      d_model: 64
+      use_pre_norm: true
+      num_attn_layers: 4
+      num_attn_heads: 4
+    d_agentwise_mlp: 32
+    d_reg_head_mlp: 256
+    d_cls_head_mlp: 128
+    num_scenes: 8
+    num_agents: 11
+
+# Optimizer
+optimizer:
+  lr: 0.001
+  weight_decay: 0.01
+  lr_schedule:
+    div_factor: 15
+    final_div_factor: 500
+    pct_start: 0.1
+    total_steps: null

@@ -1,0 +1,7 @@
+test:
+  video_dir: ~/samples/nba50
+  num_paths: 10
+  prefix_length: 30
+  max_length: 20
+  num_id_to_upload: 3
+  num_paths_to_upload: 3
