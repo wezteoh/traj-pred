@@ -537,6 +537,65 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         return None
 
 
+class MultiplePathPredictionInterface(BasePredictionInterface):
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = get_model(
+            name=self.hparams.model.name,
+            model_args=self.hparams.model.args,
+            device="cuda" if config.trainer.accelerator == "gpu" else "cpu",
+        )
+        self.register_buffer("data_mean", torch.tensor(self.hparams.interface.data_mean))
+        self.register_buffer("data_std", torch.tensor(self.hparams.interface.data_std))
+        if self.hparams.interface.diff_in_input:
+            self.register_buffer("diff_mean", torch.tensor(self.hparams.interface.diff_mean))
+            self.register_buffer("diff_std", torch.tensor(self.hparams.interface.diff_std))
+        self.model = get_model(
+            name=self.hparams.model.name,
+            model_args=self.hparams.model.args,
+            device="cuda" if config.trainer.accelerator == "gpu" else "cpu",
+        )
+
+    def make_model_inputs_and_targets(self, batch: torch.tensor):
+        batch_n = self.normalize(batch, self.data_mean, self.data_std)
+        x = batch_n[:, : self.hparams.interface.prefix_length]
+        y = batch_n[
+            :,
+            self.hparams.interface.prefix_length : self.hparams.interface.prefix_length
+            + self.hparams.interface.output_length,
+        ]
+
+        if self.hparams.interface.deviation_as_target:
+            y = y - x[:, -1:]
+
+        if self.hparams.interface.deviation_as_input:
+            x = x - x[:, -1:]
+
+        if self.hparams.interface.diff_in_input:
+            diff_x = torch.diff(batch[:, : self.hparams.interface.prefix_length], dim=1)
+            diff_x_n = normalize(diff_x, self.diff_mean, self.diff_std)
+            diff_x_n = torch.cat([torch.zeros_like(diff_x_n[:, :1]), diff_x_n], dim=1)
+            x = torch.cat([x, diff_x_n], dim=-1)
+
+        x = cast_floats_by_trainer_precision(x, precision=self.trainer.precision)
+        y = cast_floats_by_trainer_precision(y, precision=self.trainer.precision)
+
+        return x, y, batch
+
+    def forward(self, x: torch.tensor):
+        pred, agent_scene_logits = self.model(x)
+        return pred, agent_scene_logits
+
+    def training_step(self, batch, batch_idx):
+        x, y, _ = self.make_model_inputs_and_targets(batch)
+        pred, agent_scene_logits = self.forward(x)
+        loss = self.compute_loss(pred, y, agent_scene_logits)
+        return loss
+
+    def compute_loss(self, pred, y, agent_scene_logits):
+        return F.mse_loss(pred, y)
+
+
 if __name__ == "__main__":
     from omegaconf import OmegaConf
 
