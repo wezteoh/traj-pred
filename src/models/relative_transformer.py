@@ -32,20 +32,29 @@ class RelativeTransformer(nn.Module):
             ]
         )
         self.post_decoder_act = nn.ReLU()
-        self.agentwise_mlp = nn.Sequential(
+        # use num agentwise_mlp layers to set
+        agentwise_mlp_layers = [
             nn.Linear(
                 (
                     relative_transformer_block_config["d_model"]
                     if not traj_conditioning
                     else relative_transformer_block_config["d_model"] + d_traj
                 ),
-                d_agentwise_mlp,
+                d_agentwise_mlp[0],
             ),
-            self.post_decoder_act,
-        )
+            nn.ReLU(),
+        ]
+        for i in range(1, len(d_agentwise_mlp)):
+            agentwise_mlp_layers.extend(
+                [
+                    nn.Linear(d_agentwise_mlp[i - 1], d_agentwise_mlp[i]),
+                    nn.ReLU(),
+                ]
+            )
+        self.agentwise_mlp = nn.Sequential(*agentwise_mlp_layers)
         self.reg_head = nn.Sequential(
             nn.Linear(
-                num_agents * d_agentwise_mlp,
+                num_agents * d_agentwise_mlp[-1],
                 d_reg_head_mlp,
             ),
             nn.ReLU(),
@@ -53,7 +62,7 @@ class RelativeTransformer(nn.Module):
         )
         self.cls_head = nn.Sequential(
             nn.Linear(
-                num_agents * d_agentwise_mlp,
+                num_agents * d_agentwise_mlp[-1],
                 d_cls_head_mlp,
             ),
             nn.ReLU(),
