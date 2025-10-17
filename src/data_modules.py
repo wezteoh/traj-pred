@@ -10,12 +10,14 @@ class TrajectoryDataModule(pl.LightningDataModule):
     def __init__(
         self,
         data_dir: str = None,
-        bsz: int = 32,
+        train_bsz: int = 32,
+        val_bsz: int = 32,
         num_workers: int = 4,
     ):
         super().__init__()
         self.data_dir = Path(os.path.expanduser(data_dir))
-        self.bsz = bsz
+        self.train_bsz = train_bsz
+        self.val_bsz = val_bsz
         self.num_workers = num_workers
 
     def prepare_data(self):
@@ -30,18 +32,18 @@ class TrajectoryDataModule(pl.LightningDataModule):
         }
 
     def train_dataloader(self, *args, **kwargs):
-        return self._data_loader(self.dataset["train"], shuffle=True)
+        return self._data_loader(self.dataset["train"], shuffle=True, bsz=self.train_bsz)
 
     def val_dataloader(self, *args, **kwargs):
-        return self._data_loader(self.dataset["test"], shuffle=False)
+        return self._data_loader(self.dataset["test"], shuffle=False, bsz=self.val_bsz)
 
     def test_dataloader(self, *args, **kwargs):
-        return self._data_loader(self.dataset["test"], shuffle=False)
+        return self._data_loader(self.dataset["test"], shuffle=False, bsz=self.val_bsz)
 
-    def _data_loader(self, dataset: Dataset, shuffle: bool = False) -> DataLoader:
+    def _data_loader(self, dataset: Dataset, shuffle: bool = False, bsz: int = None) -> DataLoader:
         return DataLoader(
             dataset,
-            batch_size=self.bsz,
+            batch_size=bsz,
             num_workers=self.num_workers,
             shuffle=shuffle,
             pin_memory=True,

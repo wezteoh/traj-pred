@@ -37,7 +37,7 @@ def create_trainer(config):
         callbacks.append(
             ModelCheckpoint(
                 dirpath=Path(config.train.results_dir) / "checkpoints",
-                filename=f"epoch={{epoch:02d}}-{config.train.monitor_metric}={{{config.train.monitor_metric:.3f}}}",
+                filename=f"epoch={{epoch:02d}}-{config.train.monitor_metric}={{{config.train.monitor_metric}:.3f}}",
                 save_top_k=3,  # how many best models to keep
                 monitor=config.train.monitor_metric,  # metric to monitor
                 mode="min",  # minimize or maximize the metric

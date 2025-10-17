@@ -85,7 +85,7 @@ class MotionTransformerEncoder(nn.Module):
 
     def forward(self, past_traj, return_cache=False):
         """
-        Args: [B, T, A, 2]
+        Args: [B, T, A, D]
 
         """
         inference_cache = {}

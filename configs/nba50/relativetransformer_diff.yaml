@@ -1,8 +1,7 @@
 # Minimal, fast debug run on CPU
 wandb:
   project: relativetransformer-nba50
-  name: dryrun
-
+  name: diff-inputtarget
 train:
   seed: 0
   validate_at_start: true
@@ -28,10 +27,12 @@ trainer:
   
 interface:
   name: AutoregressiveMultiplePathPredictionInterface
-  diff_as_target: false
-  diff_in_input: false
+  diff_as_target: true
+  diff_in_input: true
   data_mean: [45.0, 25.0]
   data_std: [22.5, 12.5] # we get the data to the range of -2.0 to 2.0
+  diff_mean: [0.0, 0.0]
+  diff_std: [0.75, 0.75]
   loss_weights:
     reg: 1.0
     scene: 1.0
@@ -43,9 +44,9 @@ interface:
   num_paths_to_upload: 3
   video_dir: ~/samples/nba50
   upload_every_n_epochs: 5
-  masking_ratio_start: 0.50
+  masking_ratio_start: 0.00
   masking_ratio_end: 0.00
-  masking_end_at_training_pct: 0.5
+  masking_end_at_training_pct: 0.1
 
 dataset:
   name: TrajectoryDataModule
@@ -61,11 +62,11 @@ model:
     num_relative_transformer_blocks: 4
     relative_transformer_block_config:
       d_model: 64
-      d_mesh: 130
+      d_mesh: 132
       n_head: 4
       d_ff: 128
     motion_transformer_encoder_config:
-      pointnet_in_channels: 2
+      pointnet_in_channels: 4
       pointnet_hidden_dim: 64
       pointnet_num_layers: 3
       pointnet_num_pre_layers: 1

@@ -74,7 +74,7 @@ class RelativeTransformer(nn.Module):
 
     def generate(self, x: torch.tensor, inference_cache: dict):
         """
-        x: [b, 1, num_agents, 2]
+        x: [b, 1, num_agents, d]
         inference_cache: dict, will be updated in place
         """
         x_embeddings = self.past_encoder.generate(
