@@ -20,6 +20,8 @@ class TrajectoryDataModule(pl.LightningDataModule):
         self.data_dir = Path(os.path.expanduser(data_dir))
         self.train_bsz = train_bsz
         self.val_bsz = val_bsz
+        self.train_size = train_size
+        self.val_size = val_size
         self.num_workers = num_workers
 
     def prepare_data(self):

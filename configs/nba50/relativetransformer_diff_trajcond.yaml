@@ -39,7 +39,7 @@ interface:
   game: basketball
   validation_prefix_length: 30
   validation_max_length: 20
-  validation_num_paths: 10
+  validation_num_paths: 8
   num_id_to_upload: 3
   num_paths_to_upload: 3
   video_dir: ~/samples/nba50
@@ -64,9 +64,10 @@ model:
     num_relative_transformer_blocks: 4
     relative_transformer_block_config:
       d_model: 64
-      d_mesh: 132
+      d_mesh: 136
       n_head: 4
       d_ff: 128
+      traj_conditioning: true
     motion_transformer_encoder_config:
       pointnet_in_channels: 4
       pointnet_hidden_dim: 64
