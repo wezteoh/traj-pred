@@ -9,6 +9,7 @@ from src.modules.relative_transformer_block import RelativeTransformerBlock
 class RelativeTransformer(nn.Module):
     def __init__(
         self,
+        d_traj,
         num_relative_transformer_blocks,
         relative_transformer_block_config,
         motion_transformer_encoder_config,
@@ -17,8 +18,10 @@ class RelativeTransformer(nn.Module):
         d_cls_head_mlp,
         num_scenes,
         num_agents,
+        traj_conditioning=False,
     ):
         super().__init__()
+        self.traj_conditioning = traj_conditioning
         self.relative_transformer_block_config = relative_transformer_block_config
         self.motion_transformer_encoder_config = motion_transformer_encoder_config
         self.past_encoder = MotionTransformerEncoder(**motion_transformer_encoder_config)
@@ -28,10 +31,17 @@ class RelativeTransformer(nn.Module):
                 for _ in range(num_relative_transformer_blocks)
             ]
         )
+        self.post_decoder_act = nn.ReLU()
         self.agentwise_mlp = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(relative_transformer_block_config["d_model"], d_agentwise_mlp),
-            nn.ReLU(),
+            nn.Linear(
+                (
+                    relative_transformer_block_config["d_model"]
+                    if not traj_conditioning
+                    else relative_transformer_block_config["d_model"] + d_traj
+                ),
+                d_agentwise_mlp,
+            ),
+            self.post_decoder_act,
         )
         self.reg_head = nn.Sequential(
             nn.Linear(
@@ -61,6 +71,11 @@ class RelativeTransformer(nn.Module):
         for block in self.decoder_blocks:
             x_embeddings = block(x_traj, x_embeddings)  # [b, t, a, d]
 
+        x_embeddings = self.post_decoder_act(x_embeddings)
+
+        if self.traj_conditioning:
+            x_embeddings = torch.cat([x_embeddings, x_traj], dim=-1)
+
         x_embeddings = self.agentwise_mlp(x_embeddings)
         x_embeddings = rearrange(x_embeddings, "b t a d -> b t (a d)")
 
@@ -83,6 +98,11 @@ class RelativeTransformer(nn.Module):
 
         for block in self.decoder_blocks:
             x_embeddings = block(x, x_embeddings)  # [b, 1, a, d]
+
+        x_embeddings = self.post_decoder_act(x_embeddings)
+
+        if self.traj_conditioning:
+            x_embeddings = torch.cat([x_embeddings, x], dim=-1)
 
         x_embeddings = self.agentwise_mlp(x_embeddings)
         x_embeddings = rearrange(x_embeddings, "b t a d -> b t (a d)")

@@ -12,6 +12,8 @@ class TrajectoryDataModule(pl.LightningDataModule):
         data_dir: str = None,
         train_bsz: int = 32,
         val_bsz: int = 32,
+        train_size: int = None,
+        val_size: int = None,
         num_workers: int = 4,
     ):
         super().__init__()
@@ -26,6 +28,10 @@ class TrajectoryDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         train_data = np.load(self.data_dir / "train.npy", allow_pickle=True)
         test_data = np.load(self.data_dir / "test.npy", allow_pickle=True)
+        if self.train_size is not None:
+            train_data = train_data[: self.train_size]
+        if self.val_size is not None:
+            test_data = test_data[: self.val_size]
         self.dataset = {
             "train": train_data,
             "test": test_data,
