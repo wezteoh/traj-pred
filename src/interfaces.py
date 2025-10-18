@@ -333,6 +333,16 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
         record_step.update(metric_dict)
 
+        metric_dict = self.compute_ade_fde(
+            samples_original_scale,
+            gt_path_original_scale[
+                :,
+                self.hparams.interface.validation_prefix_length : self.hparams.interface.validation_prefix_length
+                + self.hparams.interface.validation_max_length,
+            ],
+        )
+        record_step.update(metric_dict)
+
         self.log_dict(
             record_step,
             on_step=False,
