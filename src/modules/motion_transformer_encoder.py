@@ -61,7 +61,7 @@ class MotionTransformerEncoder(nn.Module):
             d_model=d_model,
             dropout=0.1,
             nhead=num_attn_heads,
-            dim_feedforward=d_model * 4,
+            dim_feedforward=d_model * 2,
             norm_first=use_pre_norm,
             batch_first=True,
         )

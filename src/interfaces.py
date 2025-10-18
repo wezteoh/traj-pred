@@ -14,7 +14,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 from src.models import get_model
 from src.utils.data import cast_floats_by_trainer_precision, normalize, unnormalize
 from src.utils.drawing import create_frames_from_trajectory, create_video_from_frames
-from src.utils.misc import linear_schedule
+from src.utils.misc import linear_schedule, remix_minade_paths
 
 
 class BasePredictionInterface(pl.LightningModule):
@@ -567,7 +567,7 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
         )
 
     def make_model_inputs_and_targets(self, batch: torch.tensor):
-        batch_n = self.normalize(batch, self.data_mean, self.data_std)
+        batch_n = normalize(batch, self.data_mean, self.data_std)
         x = batch_n[:, : self.hparams.interface.prefix_length]
         y = batch_n[
             :,
@@ -577,9 +577,6 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
 
         if self.hparams.interface.deviation_as_target:
             y = y - x[:, -1:]
-
-        if self.hparams.interface.deviation_as_input:
-            x = x - x[:, -1:]
 
         if self.hparams.interface.diff_in_input:
             diff_x = torch.diff(batch[:, : self.hparams.interface.prefix_length], dim=1)
@@ -635,14 +632,13 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
 
     def validation_step(self, batch, batch_idx):
         x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
-        timesteps = y.shape[1]
-        pred, agent_scene_logits = self.forward(x)  # [b, t, k, a, 2], [b, t, k, a]
-        error = (pred - y.unsqueeze(2)).norm(dim=-1)  # [b,t,k,a]
-        error_by_scene = error.sum(dim=-1)  # [b,t,k]
-        selected_components = error_by_scene.argmin(dim=-1)  # [b,t]
+        pred, agent_scene_logits = self.forward(x)  # [b, k, t, a, 2], [b, k, a]
+        error = (pred - y.unsqueeze(1)).norm(dim=-1)  # [b,k,t,a]
+        error_by_agent = error.sum(dim=-2)  # [b,k,a]
 
-        reg_loss_components = error_by_scene.gather(2, selected_components.unsqueeze(-1))
-        reg_loss = reg_loss_components.mean() / timesteps
+        selected_components = error_by_agent.argmin(dim=-2)  # [b,a]
+        reg_loss_components = error_by_agent.gather(1, selected_components.unsqueeze(1))  # [b,a]
+        reg_loss = reg_loss_components.mean() / y.shape[-2]  # divided over timesteps
         agent_scene_logits = rearrange(agent_scene_logits, "b k a -> (b a) k")
         agent_path_loss = F.cross_entropy(
             agent_scene_logits,
@@ -659,7 +655,7 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
         }
 
         if self.hparams.interface.deviation_as_target:
-            pred = pred + x[:, -1:].unsqueeze(2)
+            pred = pred + x[:, -1:, :, :2].unsqueeze(2)
         samples_original_scale = unnormalize(pred, self.data_mean, self.data_std)
 
         metric_dict = self.compute_jade_jfde(
@@ -688,6 +684,178 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
             logger=True,
             add_dataloader_idx=False,
         )
+
+        if (
+            self.trainer.global_step > 0
+            and (self.trainer.current_epoch + 1) % self.hparams.interface.upload_every_n_epochs == 0
+            and batch_idx == 0
+            and self.hparams.interface.num_id_to_upload > 0
+        ):
+            video_dir = f"{os.path.expanduser(self.hparams.train.results_dir)}/samples"
+            Path(video_dir).mkdir(parents=True, exist_ok=True)
+
+            print("sampling ade paths at validation step")
+            remixed_samples = remix_minade_paths(
+                samples_original_scale[: self.hparams.interface.num_id_to_upload],
+                gt_path_original_scale[
+                    : self.hparams.interface.num_id_to_upload,
+                    self.hparams.interface.validation_prefix_length :,
+                ],
+            )  # [b, t, a, 2]
+            remixed_samples_to_upload = (
+                torch.cat(
+                    [
+                        gt_path_original_scale[
+                            : self.hparams.interface.num_id_to_upload,
+                            self.hparams.interface.validation_prefix_length
+                            - 5 : self.hparams.interface.validation_prefix_length,
+                        ],
+                        remixed_samples,
+                    ],
+                    dim=1,
+                )
+                .cpu()
+                .numpy()
+            )
+            videos = []
+            for i in range(remixed_samples_to_upload.shape[0]):
+                frames = create_frames_from_trajectory(
+                    remixed_samples_to_upload[i], game=self.hparams.interface.game
+                )
+                video_path = f"{video_dir}/sample_{i}.mp4"
+                create_video_from_frames(frames, video_path, fps=5)
+                videos.append(wandb.Video(video_path, format="mp4"))
+
+            wandb.log({"ade_sample": videos}, commit=False)
+
+            print("sampling at validation step")
+            sample_prefixes_original_scale = gt_path_original_scale[
+                : self.hparams.interface.num_id_to_upload,
+                self.hparams.interface.validation_prefix_length
+                - 5 : self.hparams.interface.validation_prefix_length :,
+            ]
+            samples_prefixes_original_scale = sample_prefixes_original_scale.unsqueeze(1).repeat(
+                1, self.hparams.interface.num_paths_to_upload, 1, 1, 1
+            )
+            samples_original_scale = samples_original_scale[
+                : self.hparams.interface.num_id_to_upload,
+                : self.hparams.interface.num_paths_to_upload,
+            ]
+            samples_to_upload = (
+                torch.cat([samples_prefixes_original_scale, samples_original_scale], dim=2)
+                .cpu()
+                .numpy()
+            )  # [b, num_paths, t, num_agents, 2]
+            videos = []
+            for i in range(samples_to_upload.shape[0]):
+                for j in range(samples_to_upload.shape[1]):
+                    frames = create_frames_from_trajectory(
+                        samples_to_upload[i, j], game=self.hparams.interface.game
+                    )
+                    video_path = f"{video_dir}/sample_{i}_{j}.mp4"
+                    create_video_from_frames(frames, video_path, fps=5)
+                    videos.append(wandb.Video(video_path, format="mp4"))
+
+            wandb.log({"sample": videos}, commit=False)
+
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
+        pred, agent_scene_logits = self.forward(x)  # [b, k, t, a, 2], [b, k, a]
+
+        if self.hparams.interface.deviation_as_target:
+            pred = pred + x[:, -1:, :, :2].unsqueeze(2)
+        samples_original_scale = unnormalize(pred, self.data_mean, self.data_std)
+
+        record_step = {}
+        metric_dict = self.compute_jade_jfde(
+            samples_original_scale,
+            gt_path_original_scale[
+                :,
+                self.hparams.interface.prefix_length : self.hparams.interface.prefix_length
+                + self.hparams.interface.output_length,
+            ],
+        )
+        record_step.update(metric_dict)
+        metric_dict = self.compute_ade_fde(
+            samples_original_scale,
+            gt_path_original_scale[
+                :,
+                self.hparams.interface.prefix_length : self.hparams.interface.prefix_length
+                + self.hparams.interface.output_length,
+            ],
+        )
+        record_step.update(metric_dict)
+        self.log_dict(
+            record_step,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            add_dataloader_idx=False,
+        )
+
+        if batch_idx == 0 and self.hparams.test.num_id_to_upload > 0:
+            video_dir = f"{os.path.expanduser(self.hparams.test.video_dir)}"
+            Path(video_dir).mkdir(parents=True, exist_ok=True)
+
+            print("sampling ade paths at validation step")
+            remixed_samples = remix_minade_paths(
+                samples_original_scale[: self.hparams.interface.num_id_to_upload],
+                gt_path_original_scale[
+                    : self.hparams.interface.num_id_to_upload,
+                    self.hparams.interface.validation_prefix_length :,
+                ],
+            )  # [b, t, a, 2]
+            remixed_samples_to_upload = (
+                torch.cat(
+                    [
+                        gt_path_original_scale[
+                            : self.hparams.interface.num_id_to_upload,
+                            : self.hparams.test.prefix_length,
+                        ],
+                        remixed_samples,
+                    ],
+                    dim=1,
+                )
+                .cpu()
+                .numpy()
+            )
+            for i in range(remixed_samples_to_upload.shape[0]):
+                frames = create_frames_from_trajectory(
+                    remixed_samples_to_upload[i], game=self.hparams.interface.game
+                )
+                video_path = f"{video_dir}/sample_ade_min_{i}.mp4"
+                create_video_from_frames(frames, video_path, fps=5)
+                print(f"Saved video to {video_path}")
+
+            print("sampling at test step")
+            sample_prefixes_original_scale = gt_path_original_scale[
+                : self.hparams.test.num_id_to_upload,
+                : self.hparams.test.prefix_length :,
+            ]
+            samples_prefixes_original_scale = sample_prefixes_original_scale.unsqueeze(1).repeat(
+                1, self.hparams.test.num_paths_to_upload, 1, 1, 1
+            )
+            samples_original_scale = samples_original_scale[
+                : self.hparams.test.num_id_to_upload,
+                : self.hparams.test.num_paths_to_upload,
+            ]
+            samples_to_upload = (
+                torch.cat([samples_prefixes_original_scale, samples_original_scale], dim=2)
+                .cpu()
+                .numpy()
+            )  # [b, num_paths, t, num_agents, 2]
+            for i in range(samples_to_upload.shape[0]):
+                for j in range(samples_to_upload.shape[1]):
+                    frames = create_frames_from_trajectory(
+                        samples_to_upload[i, j], game=self.hparams.interface.game
+                    )
+                    video_path = f"{video_dir}/sample_{i}_{j}.mp4"
+                    create_video_from_frames(frames, video_path, fps=5)
+                    print(f"Saved video to {video_path}")
+        return None
 
 
 if __name__ == "__main__":

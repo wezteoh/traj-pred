@@ -1,14 +1,14 @@
 # Minimal, fast debug run on CPU
 wandb:
-  project: relativetransformer-nba30
-  name: diff-inputtarget-trajcond-4blocks
+  project: parallel-relativetransformer-nba30
+  name: diff-input-trajcond-4blocks-nocls
 train:
   seed: 0
   validate_at_start: true
   test: false
   ckpt: null
   results_dir: ~/ckpt
-  monitor_metric: jade_min
+  monitor_metric: ade_min
 
 # Lightning Trainer
 trainer:
@@ -26,8 +26,8 @@ trainer:
   gradient_clip_algorithm: norm
   
 interface:
-  name: AutoregressiveMultiplePathPredictionInterface
-  diff_as_target: true
+  name: MultiplePathPredictionInterface
+  deviation_as_target: true
   diff_in_input: true
   data_mean: [45.0, 25.0]
   data_std: [22.5, 12.5] # we get the data to the range of -2.0 to 2.0
@@ -35,23 +35,22 @@ interface:
   diff_std: [0.75, 0.75]
   loss_weights:
     reg: 1.0
-    scene: 1.0
+    agent_path: 0.0 # not using cls
   game: basketball
+  prefix_length: 10
   validation_prefix_length: 10
-  validation_max_length: 20
-  validation_num_paths: 8
   num_id_to_upload: 3
-  num_paths_to_upload: 3
-  video_dir: ~/samples/nba50
+  num_paths_to_upload: 2
   upload_every_n_epochs: 5
   masking_ratio_start: 0.00
   masking_ratio_end: 0.00
   masking_end_at_training_pct: 0.1
+  output_length: 20
 
 dataset:
   name: TrajectoryDataModule
   train_bsz: 192
-  val_bsz: 1024
+  val_bsz: 512
   train_size: null
   val_size: 5120
   num_workers: 0
@@ -59,14 +58,14 @@ dataset:
 
 # Small model for speed (used by CPU class after the code tweak below)
 model:
-  name: RelativeTransformer
+  name: ParallelRelativeTransformer
   args:
     num_relative_transformer_blocks: 4
     relative_transformer_block_config:
-      d_model: 128
-      d_mesh: 260
+      d_model: 256
+      d_mesh: 516
       n_head: 8
-      d_ff: 256
+      d_ff: 512
     motion_transformer_encoder_config:
       pointnet_in_channels: 4
       pointnet_hidden_dim: 64
@@ -74,24 +73,25 @@ model:
       pointnet_num_pre_layers: 1
       pointnet_out_channels: 64
       entity_embedding_dim: 64
-      d_model: 128
+      d_model: 256
       use_pre_norm: true
-      num_attn_layers: 4
-      num_attn_heads: 8
-    d_agentwise_mlp: [64,32]
+      num_attn_layers: 3
+      num_attn_heads: 16
+    d_agentwise_compressor_mlp: 1 # not using class
     d_reg_head_mlp: 512
-    d_cls_head_mlp: 256
-    num_scenes: 8
+    d_cls_head_mlp: 1 # not using class
+    num_paths: 20
+    num_output_steps: 20 
     num_agents: 11
     traj_conditioning: true
     d_traj: 4
 
 # Optimizer
 optimizer:
-  lr: 0.002
+  lr: 0.0005
   weight_decay: 0.01
   lr_schedule:
     div_factor: 15
-    final_div_factor: 500
+    final_div_factor: 200
     pct_start: 0.1
     total_steps: null
