@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import wandb
 from omegaconf import DictConfig, OmegaConf
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.model_summary import summarize
 from torch.optim import AdamW
@@ -31,7 +31,11 @@ def create_trainer(config):
             **wandb_cfg,
         )
 
-    callbacks = []
+    callbacks = [
+        LearningRateMonitor(
+            logging_interval="step",
+        )
+    ]
     # checkpointing
     if config.trainer.enable_checkpointing:
         callbacks.append(

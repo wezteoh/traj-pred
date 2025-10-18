@@ -1,0 +1,8 @@
+test:
+  video_dir: ~/samples/nba30
+  num_paths: 20
+  prefix_length: 10
+  max_length: 20
+  num_id_to_upload: 3
+  num_paths_to_upload: 3
+  temperature: 5.0
