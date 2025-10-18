@@ -24,4 +24,10 @@ class ParallelRelativeTransformer(nn.Module):
         self.num_agents = num_agents
 
     def forward(self, x_traj: torch.tensor, return_cache=False):
+
+        x_embeddings = self.motion_transformer_encoder(x_traj)  # [b, a, d]
+
+        for block in self.decoder_blocks:
+            x_embeddings = block(x_traj[:, :-1], x_embeddings)  # [b, 1, a, d]
+
         pass

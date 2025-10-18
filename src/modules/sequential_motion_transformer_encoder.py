@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from src.modules.pointnet_polyline_encoder import PointNetPolylineEncoder
+from src.modules.sequential_pointnet_polyline_encoder import SequentialPointNetPolylineEncoder
 
 
 class SinusoidalPosEmb(nn.Module):
@@ -24,7 +24,7 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
-class MotionTransformerEncoder(nn.Module):
+class SequentialMotionTransformerEncoder(nn.Module):
     def __init__(
         self,
         pointnet_in_channels,
@@ -41,7 +41,7 @@ class MotionTransformerEncoder(nn.Module):
         super().__init__()
 
         # build polyline encoders
-        self.agent_polyline_encoder = PointNetPolylineEncoder(
+        self.agent_polyline_encoder = SequentialPointNetPolylineEncoder(
             in_channels=pointnet_in_channels,
             hidden_dim=pointnet_hidden_dim,
             num_layers=pointnet_num_layers,
@@ -83,24 +83,50 @@ class MotionTransformerEncoder(nn.Module):
         )
         return agent_query  # [A, D]
 
-    def forward(self, past_traj):
+    def forward(self, past_traj, return_cache=False):
         """
         Args: [B, T, A, D]
 
         """
+        inference_cache = {}
         past_traj = rearrange(past_traj, "b t a d -> b a t d")
-        obj_polylines_feature = self.agent_polyline_encoder(past_traj)  # (b, a, d)
+        obj_polylines_feature, agent_polyline_encoder_cache = self.agent_polyline_encoder(
+            past_traj, return_cache=return_cache
+        )  # (b, a, t, d)
+        obj_polylines_feature = rearrange(obj_polylines_feature, "b a t d -> (b t) a d")
         agent_query = rearrange(
             self.agent_query_embedding(torch.arange(1).to(past_traj.device)), "a d -> 1 a d"
         ).repeat(obj_polylines_feature.shape[0], 1, 1)
         obj_polylines_feature = torch.cat([obj_polylines_feature, agent_query], dim=-1)
         obj_polylines_feature = self.mlp(obj_polylines_feature)
         encoder_out = self.transformer_encoder(obj_polylines_feature)
-        return encoder_out  # [b, a, d]
+        encoder_out = rearrange(encoder_out, "(b t) a d -> b t a d", b=past_traj.shape[0])
+        if return_cache:
+            inference_cache["agent_polyline_encoder_cache"] = agent_polyline_encoder_cache
+        return encoder_out, inference_cache
+
+    def generate(self, x: torch.tensor, inference_cache: dict):
+        """
+        x: [b, 1, num_agents, 2]
+        inference_cache: dict, will be updated in place
+        """
+        x = rearrange(x, "b t a d -> b a t d")
+        obj_polylines_feature = self.agent_polyline_encoder.generate(
+            x, inference_cache["agent_polyline_encoder_cache"]
+        )
+        obj_polylines_feature = rearrange(obj_polylines_feature, "b a t d -> (b t) a d")
+        agent_query = rearrange(
+            self.agent_query_embedding(torch.arange(1).to(x.device)), "a d -> 1 a d"
+        ).repeat(obj_polylines_feature.shape[0], 1, 1)
+        obj_polylines_feature = torch.cat([obj_polylines_feature, agent_query], dim=-1)
+        obj_polylines_feature = self.mlp(obj_polylines_feature)
+        encoder_out = self.transformer_encoder(obj_polylines_feature)
+        encoder_out = rearrange(encoder_out, "(b t) a d -> b t a d", b=x.shape[0])
+        return encoder_out
 
 
 if __name__ == "__main__":
-    encoder = MotionTransformerEncoder(
+    encoder = SequentialMotionTransformerEncoder(
         pointnet_in_channels=2,
         pointnet_hidden_dim=64,
         pointnet_num_layers=3,
@@ -114,5 +140,15 @@ if __name__ == "__main__":
     )
     encoder.eval()
     past_traj = torch.rand(64, 50, 11, 2)
-    encoder_out = encoder(past_traj)
+    encoder_out, inference_cache = encoder(past_traj[:, :-1], return_cache=True)
     print(encoder_out.shape)
+    x = past_traj[:, -1:]
+    encoder_out_gen = encoder.generate(x, inference_cache)
+    print(encoder_out_gen.shape)
+
+    encoder_out_all, _ = encoder(past_traj, return_cache=False)
+    print(encoder_out_all.shape)
+    import ipdb
+
+    ipdb.set_trace()
+    assert torch.allclose(encoder_out_all[:, -1:], encoder_out_gen)

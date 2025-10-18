@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from src.modules.motion_transformer_encoder import MotionTransformerEncoder
 from src.modules.relative_transformer_block import RelativeTransformerBlock
+from src.modules.sequential_motion_transformer_encoder import SequentialMotionTransformerEncoder
 
 
 class RelativeTransformer(nn.Module):
@@ -11,7 +11,7 @@ class RelativeTransformer(nn.Module):
         self,
         num_relative_transformer_blocks,
         relative_transformer_block_config,
-        motion_transformer_encoder_config,
+        sequential_motion_transformer_encoder_config,
         d_agentwise_mlp,
         d_reg_head_mlp,
         d_cls_head_mlp,
@@ -19,9 +19,9 @@ class RelativeTransformer(nn.Module):
         num_agents,
     ):
         super().__init__()
-        self.relative_transformer_block_config = relative_transformer_block_config
-        self.motion_transformer_encoder_config = motion_transformer_encoder_config
-        self.past_encoder = MotionTransformerEncoder(**motion_transformer_encoder_config)
+        self.past_encoder = SequentialMotionTransformerEncoder(
+            **sequential_motion_transformer_encoder_config
+        )
         self.decoder_blocks = nn.ModuleList(
             [
                 RelativeTransformerBlock(**relative_transformer_block_config)

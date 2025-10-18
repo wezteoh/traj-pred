@@ -37,6 +37,79 @@ class BasePredictionInterface(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         raise NotImplementedError("Subclass must implement this method")
 
+    def compute_jade_jfde(self, samples, y):
+        """
+        samples: [b, num_paths, t, a, 2]
+        y: [b, t, num_agents, 2]
+        """
+        distances = (samples - y.unsqueeze(1)).norm(p=2, dim=-1)  # [b, num_paths, t, num_agents]
+        jade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
+        jade_ball = jade_path_agentwise[:, :, -1:].mean(dim=-1)  # [b, num_paths]
+        jade_team1 = jade_path_agentwise[:, :, :5].mean(dim=-1)  # [b, num_paths]
+        jade_team2 = jade_path_agentwise[:, :, 5:].mean(dim=-1)  # [b, num_paths]
+        jade_all = jade_path_agentwise.mean(dim=-1)  # [b, num_paths]
+
+        jade_mean = jade_all.mean()
+        jade_min = jade_all.min(dim=-1).values.mean()
+        jade_ball_mean = jade_ball.mean()
+        jade_ball_min = jade_ball.min(dim=-1).values.mean()
+        jade_team1_mean = jade_team1.mean()
+        jade_team1_min = jade_team1.min(dim=-1).values.mean()
+        jade_team2_mean = jade_team2.mean()
+        jade_team2_min = jade_team2.min(dim=-1).values.mean()
+
+        jfde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
+        jfde_ball = jfde_path_agentwise[:, :, -1:].mean(dim=-1)  # [b, num_paths]
+        jfde_team1 = jfde_path_agentwise[:, :, :5].mean(dim=-1)  # [b, num_paths]
+        jfde_team2 = jfde_path_agentwise[:, :, 5:].mean(dim=-1)  # [b, num_paths]
+        jfde_all = jfde_path_agentwise.mean(dim=-1)  # [b, num_paths]
+
+        jfde_mean = jfde_all.mean()
+        jfde_min = jfde_all.min(dim=-1).values.mean()
+        jfde_ball_mean = jfde_ball.mean()
+        jfde_ball_min = jfde_ball.min(dim=-1).values.mean()
+        jfde_team1_mean = jfde_team1.mean()
+        jfde_team1_min = jfde_team1.min(dim=-1).values.mean()
+        jfde_team2_mean = jfde_team2.mean()
+        jfde_team2_min = jfde_team2.min(dim=-1).values.mean()
+        return {
+            "jade_mean": jade_mean,
+            "jade_min": jade_min,
+            "jade_ball_mean": jade_ball_mean,
+            "jade_ball_min": jade_ball_min,
+            "jade_team1_mean": jade_team1_mean,
+            "jade_team1_min": jade_team1_min,
+            "jade_team2_mean": jade_team2_mean,
+            "jade_team2_min": jade_team2_min,
+            "jfde_mean": jfde_mean,
+            "jfde_min": jfde_min,
+            "jfde_ball_mean": jfde_ball_mean,
+            "jfde_ball_min": jfde_ball_min,
+            "jfde_team1_mean": jfde_team1_mean,
+            "jfde_team1_min": jfde_team1_min,
+            "jfde_team2_mean": jfde_team2_mean,
+            "jfde_team2_min": jfde_team2_min,
+        }
+
+    def compute_ade_fde(self, samples, y):
+        """
+        samples: [b, num_paths, t, a, 2]
+        y: [b, t, num_agents, 2]
+        """
+        distances = (samples - y.unsqueeze(1)).norm(p=2, dim=-1)  # [b, num_paths, t, num_agents]
+        ade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
+        ade_agent_pathwise = rearrange(ade_path_agentwise, "b p a -> b a p")
+        ade_min = ade_agent_pathwise.min(dim=-1).values.mean()
+
+        fde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
+        fde_agent_pathwise = rearrange(fde_path_agentwise, "b p a -> b a p")
+        fde_min = fde_agent_pathwise.min(dim=-1).values.mean()
+
+        return {
+            "ade_min": ade_min,
+            "fde_min": fde_min,
+        }
+
     def configure_optimizers(
         self,
     ):
@@ -387,79 +460,6 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         samples = torch.stack(samples, dim=1)  # [b, num_paths, t, a, 2]
         return samples
 
-    def compute_jade_jfde(self, samples, y):
-        """
-        samples: [b, num_paths, t, a, 2]
-        y: [b, t, num_agents, 2]
-        """
-        distances = (samples - y.unsqueeze(1)).norm(p=2, dim=-1)  # [b, num_paths, t, num_agents]
-        jade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
-        jade_ball = jade_path_agentwise[:, :, -1:].mean(dim=-1)  # [b, num_paths]
-        jade_team1 = jade_path_agentwise[:, :, :5].mean(dim=-1)  # [b, num_paths]
-        jade_team2 = jade_path_agentwise[:, :, 5:].mean(dim=-1)  # [b, num_paths]
-        jade_all = jade_path_agentwise.mean(dim=-1)  # [b, num_paths]
-
-        jade_mean = jade_all.mean()
-        jade_min = jade_all.min(dim=-1).values.mean()
-        jade_ball_mean = jade_ball.mean()
-        jade_ball_min = jade_ball.min(dim=-1).values.mean()
-        jade_team1_mean = jade_team1.mean()
-        jade_team1_min = jade_team1.min(dim=-1).values.mean()
-        jade_team2_mean = jade_team2.mean()
-        jade_team2_min = jade_team2.min(dim=-1).values.mean()
-
-        jfde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
-        jfde_ball = jfde_path_agentwise[:, :, -1:].mean(dim=-1)  # [b, num_paths]
-        jfde_team1 = jfde_path_agentwise[:, :, :5].mean(dim=-1)  # [b, num_paths]
-        jfde_team2 = jfde_path_agentwise[:, :, 5:].mean(dim=-1)  # [b, num_paths]
-        jfde_all = jfde_path_agentwise.mean(dim=-1)  # [b, num_paths]
-
-        jfde_mean = jfde_all.mean()
-        jfde_min = jfde_all.min(dim=-1).values.mean()
-        jfde_ball_mean = jfde_ball.mean()
-        jfde_ball_min = jfde_ball.min(dim=-1).values.mean()
-        jfde_team1_mean = jfde_team1.mean()
-        jfde_team1_min = jfde_team1.min(dim=-1).values.mean()
-        jfde_team2_mean = jfde_team2.mean()
-        jfde_team2_min = jfde_team2.min(dim=-1).values.mean()
-        return {
-            "jade_mean": jade_mean,
-            "jade_min": jade_min,
-            "jade_ball_mean": jade_ball_mean,
-            "jade_ball_min": jade_ball_min,
-            "jade_team1_mean": jade_team1_mean,
-            "jade_team1_min": jade_team1_min,
-            "jade_team2_mean": jade_team2_mean,
-            "jade_team2_min": jade_team2_min,
-            "jfde_mean": jfde_mean,
-            "jfde_min": jfde_min,
-            "jfde_ball_mean": jfde_ball_mean,
-            "jfde_ball_min": jfde_ball_min,
-            "jfde_team1_mean": jfde_team1_mean,
-            "jfde_team1_min": jfde_team1_min,
-            "jfde_team2_mean": jfde_team2_mean,
-            "jfde_team2_min": jfde_team2_min,
-        }
-
-    def compute_ade_fde(self, samples, y):
-        """
-        samples: [b, num_paths, t, a, 2]
-        y: [b, t, num_agents, 2]
-        """
-        distances = (samples - y.unsqueeze(1)).norm(p=2, dim=-1)  # [b, num_paths, t, num_agents]
-        ade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
-        ade_agent_pathwise = rearrange(ade_path_agentwise, "b p a -> b a p")
-        ade_min = ade_agent_pathwise.min(dim=-1).values.mean()
-
-        fde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
-        fde_agent_pathwise = rearrange(fde_path_agentwise, "b p a -> b a p")
-        fde_min = fde_agent_pathwise.min(dim=-1).values.mean()
-
-        return {
-            "ade_min": ade_min,
-            "fde_min": fde_min,
-        }
-
     def test_step(self, batch, batch_idx):
         x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
 
@@ -587,13 +587,97 @@ class MultiplePathPredictionInterface(BasePredictionInterface):
         return pred, agent_scene_logits
 
     def training_step(self, batch, batch_idx):
+        record_step = {}
         x, y, _ = self.make_model_inputs_and_targets(batch)
-        pred, agent_scene_logits = self.forward(x)
-        loss = self.compute_loss(pred, y, agent_scene_logits)
+        pred, agent_scene_logits = self.forward(x)  # [b, k, t, a, 2], [b, k, a]
+        error = (pred - y.unsqueeze(1)).norm(dim=-1)  # [b,k,t,a]
+        error_by_agent = error.sum(dim=-2)  # [b,k,a]
+
+        selected_components = error_by_agent.argmin(dim=-2)  # [b,a]
+        reg_loss_components = error_by_agent.gather(1, selected_components.unsqueeze(1))  # [b,a]
+        reg_loss = reg_loss_components.mean() / y.shape[-2]  # divided over timesteps
+
+        agent_scene_logits = rearrange(agent_scene_logits, "b k a -> (b a) k")
+        agent_path_loss = F.cross_entropy(
+            agent_scene_logits,
+            selected_components.reshape(-1),
+        )
+        loss = (
+            self.hparams.interface.loss_weights.reg * reg_loss
+            + self.hparams.interface.loss_weights.agent_path * agent_path_loss
+        )
+        record_step.update(
+            {
+                "trainer_loss": loss.item(),
+                "trainer_reg_loss": reg_loss.item(),
+                "trainer_agent_path_loss": agent_path_loss.item(),
+            }
+        )
+        self.log_dict(
+            record_step,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            add_dataloader_idx=False,
+        )
         return loss
 
-    def compute_loss(self, pred, y, agent_scene_logits):
-        return F.mse_loss(pred, y)
+    def validation_step(self, batch, batch_idx):
+        x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
+        timesteps = y.shape[1]
+        pred, agent_scene_logits = self.forward(x)  # [b, t, k, a, 2], [b, t, k, a]
+        error = (pred - y.unsqueeze(2)).norm(dim=-1)  # [b,t,k,a]
+        error_by_scene = error.sum(dim=-1)  # [b,t,k]
+        selected_components = error_by_scene.argmin(dim=-1)  # [b,t]
+
+        reg_loss_components = error_by_scene.gather(2, selected_components.unsqueeze(-1))
+        reg_loss = reg_loss_components.mean() / timesteps
+        agent_scene_logits = rearrange(agent_scene_logits, "b k a -> (b a) k")
+        agent_path_loss = F.cross_entropy(
+            agent_scene_logits,
+            selected_components.reshape(-1),
+        )
+        loss = (
+            self.hparams.interface.loss_weights.reg * reg_loss
+            + self.hparams.interface.loss_weights.agent_path * agent_path_loss
+        )
+        record_step = {
+            "validation_loss": loss.item(),
+            "validation_reg_loss": reg_loss.item(),
+            "validation_agent_path_loss": agent_path_loss.item(),
+        }
+
+        if self.hparams.interface.deviation_as_target:
+            pred = pred + x[:, -1:].unsqueeze(2)
+        samples_original_scale = unnormalize(pred, self.data_mean, self.data_std)
+
+        metric_dict = self.compute_jade_jfde(
+            samples_original_scale,
+            gt_path_original_scale[
+                :,
+                self.hparams.interface.prefix_length : self.hparams.interface.prefix_length
+                + self.hparams.interface.output_length,
+            ],
+        )
+        record_step.update(metric_dict)
+        metric_dict = self.compute_ade_fde(
+            samples_original_scale,
+            gt_path_original_scale[
+                :,
+                self.hparams.interface.prefix_length : self.hparams.interface.prefix_length
+                + self.hparams.interface.output_length,
+            ],
+        )
+        record_step.update(metric_dict)
+        self.log_dict(
+            record_step,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            add_dataloader_idx=False,
+        )
 
 
 if __name__ == "__main__":
