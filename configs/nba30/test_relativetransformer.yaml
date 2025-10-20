@@ -3,6 +3,6 @@ test:
   num_paths: 20
   prefix_length: 10
   max_length: 20
-  num_id_to_upload: 3
-  num_paths_to_upload: 3
+  num_id_to_upload: 5
+  num_paths_to_upload: 5
   temperature: 5.0

@@ -290,7 +290,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                 x[
                     : self.hparams.interface.num_id_to_upload,
                     self.hparams.interface.validation_prefix_length
-                    - 5 : self.hparams.interface.validation_prefix_length,
+                    - 10 : self.hparams.interface.validation_prefix_length,
                     :,
                     :2,  # only keep coordinates
                 ],
@@ -514,7 +514,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             sample_prefixes_original_scale = unnormalize(
                 x[
                     : self.hparams.test.num_id_to_upload,
-                    self.hparams.test.prefix_length - 5 : self.hparams.test.prefix_length,
+                    self.hparams.test.prefix_length - 10 : self.hparams.test.prefix_length,
                     :,
                     :2,
                 ],
