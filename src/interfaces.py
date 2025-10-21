@@ -14,7 +14,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 from src.models import get_model
 from src.utils.data import cast_floats_by_trainer_precision, normalize, unnormalize
 from src.utils.drawing import create_frames_from_trajectory, create_video_from_frames
-from src.utils.misc import linear_schedule
+from src.utils.misc import nll_molaplace_soft_vector_diagonal, sample_mol_laplace_diagonal
 
 
 class BasePredictionInterface(pl.LightningModule):
@@ -165,57 +165,23 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         return x, y, batch
 
     def forward(self, x: torch.tensor):
-        pred, scene_logits, _ = self.model(x)
-        return pred, scene_logits
+        pred, scene_logits, shrink, _ = self.model(x)
+        return pred, scene_logits, shrink
 
     def training_step(self, batch, batch_idx):
         x, y, _ = self.make_model_inputs_and_targets(batch)
-        num_agents = y.shape[2]
-        pred, scene_logits = self.forward(x)
-        error = (pred - y.unsqueeze(2)).norm(dim=-1)  # [b,t,k,a]
-        error_by_scene = error.sum(dim=-1)  # [b,t,k]
+        pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
 
-        masking_ratio = linear_schedule(
-            p_start=self.hparams.interface.masking_ratio_start,
-            p_end=self.hparams.interface.masking_ratio_end,
-            step=self.trainer.global_step,
-            total_steps=self.trainer.estimated_stepping_batches
-            * self.hparams.interface.masking_end_at_training_pct,
-        )
-
-        if masking_ratio > 0:
-            # random masking n components by batch per time step, make it goes to infinity
-            mask = (
-                torch.rand(x.shape[0], x.shape[1], self.hparams.model.args.num_scenes)
-                < masking_ratio
-            )
-            # ensure each (b,t) has at least one component not masked
-            all_masked = mask.all(dim=-1)
-            rand_idx = torch.randint(
-                0,
-                self.hparams.model.args.num_scenes,
-                size=(x.shape[0], x.shape[1]),
-                device=error_by_scene.device,
-            )
-            mask[all_masked, rand_idx[all_masked]] = False
-            mask = mask.to(error_by_scene.device)
-            error_by_scene = error_by_scene.masked_fill(mask, float("inf"))
-            scene_logits = scene_logits.masked_fill(mask, float("-inf"))
-        selected_components = error_by_scene.argmin(dim=-1)  # [b,t]
-        reg_loss_components = error_by_scene.gather(2, selected_components.unsqueeze(-1))
-        reg_loss = reg_loss_components.mean() / num_agents
-        scene_loss = F.cross_entropy(
-            scene_logits.reshape(-1, scene_logits.shape[-1]), selected_components.reshape(-1)
-        )
-        loss = (
-            self.hparams.interface.loss_weights.reg * reg_loss
-            + self.hparams.interface.loss_weights.scene * scene_loss
+        loss = nll_molaplace_soft_vector_diagonal(
+            y=rearrange(y, "b t a d -> (b t) (a d)"),
+            mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
+            log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
+            beta=rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+            eps=1e-6,
+            reduction="mean",
         )
         record_step = {
             "trainer_loss": loss.item(),
-            "trainer_reg_loss": reg_loss.item(),
-            "trainer_scene_loss": scene_loss.item(),
-            "trainer_masking_ratio": masking_ratio,
         }
 
         self.log_dict(
@@ -231,25 +197,17 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
     def validation_step(self, batch, batch_idx):
         x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
-        num_agents = y.shape[2]
-        pred, scene_logits = self.forward(x)
-        error = (pred - y.unsqueeze(2)).norm(dim=-1)  # [b,t,k,a]
-        error_by_scene = error.sum(dim=-1)  # [b,t,k]
-        selected_components = error_by_scene.argmin(dim=-1)  # [b,t]
-
-        reg_loss_components = error_by_scene.gather(2, selected_components.unsqueeze(-1))
-        reg_loss = reg_loss_components.mean() / num_agents
-        scene_loss = F.cross_entropy(
-            scene_logits.reshape(-1, scene_logits.shape[-1]), selected_components.reshape(-1)
-        )
-        loss = (
-            self.hparams.interface.loss_weights.reg * reg_loss
-            + self.hparams.interface.loss_weights.scene * scene_loss
+        pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
+        loss = nll_molaplace_soft_vector_diagonal(
+            y=rearrange(y, "b t a d -> (b t) (a d)"),
+            mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
+            log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
+            beta=rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+            eps=1e-6,
+            reduction="mean",
         )
         record_step = {
             "validation_loss": loss.item(),
-            "validation_reg_loss": reg_loss.item(),
-            "validation_scene_loss": scene_loss.item(),
         }
 
         samples_original_scale = self.sample(
@@ -337,22 +295,27 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         """
         x: [b, t, num_agents, 2]
         """
+        num_agents = x.shape[2]
         assert max_length > 1, "max_length must be greater than 1"
         samples = []
-        init_reg_out, init_cls_out, init_inference_cache = self.model(x, return_cache=True)
+        init_reg_out, init_cls_out, init_shrink, init_inference_cache = self.model(
+            x, return_cache=True
+        )
         init_cls_out = init_cls_out.detach()[:, -1]  # (b, k)
-        init_cls_dist = F.softmax(init_cls_out / temperature, dim=-1)
         init_reg_out = init_reg_out.detach()[:, -1:]  # [b, 1, k, a, 2]
+        init_shrink = init_shrink.detach()[:, -1:]  # [b, 1, k, a, 2]
 
         samples = []
         init_prev_output = unnormalize(x[:, -1:, :, :2], self.data_mean, self.data_std)
         for _ in range(num_paths):
-            selected_scene_idxs = torch.multinomial(init_cls_dist, num_samples=1)  # [b, 1]
-            selected_scene_idxs = rearrange(selected_scene_idxs, "b 1 -> b 1 1 1 1")
-            selected_scene_idxs = selected_scene_idxs.repeat(
-                1, 1, 1, init_reg_out.shape[-2], init_reg_out.shape[-1]
+            x, k_idx = sample_mol_laplace_diagonal(
+                rearrange(init_reg_out, "b t k a d -> (b t) k (a d)"),
+                init_cls_out,
+                rearrange(init_shrink, "b t k a d -> (b t) k (a d)"),
+                S=1,
+                eps=1e-6,
             )
-            x = init_reg_out.gather(2, selected_scene_idxs).squeeze(2)  # [b, t, k, a, 2]
+            x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
             if self.hparams.interface.diff_as_target:
                 output = unnormalize(x, self.diff_mean, self.diff_std) + init_prev_output
             else:
@@ -374,15 +337,15 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             prev_output = output
 
             for t in range(max_length - 1):
-                reg_out, cls_out = self.model.generate(input, inference_cache)
-                cls_out = cls_out[:, -1].detach()
-                cls_out_dist = F.softmax(cls_out / temperature, dim=-1)
-                selected_scene_idxs = torch.multinomial(cls_out_dist, num_samples=1)  # [b, 1]
-                selected_scene_idxs = rearrange(selected_scene_idxs, "b 1 -> b 1 1 1 1")
-                selected_scene_idxs = selected_scene_idxs.repeat(
-                    1, 1, 1, reg_out.shape[-2], reg_out.shape[-1]
+                reg_out, cls_out, shrink = self.model.generate(input, inference_cache)
+                x, k_idx = sample_mol_laplace_diagonal(
+                    rearrange(reg_out, "b t k a d -> (b t) k (a d)"),
+                    rearrange(cls_out, "b 1 k -> b k"),
+                    rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+                    S=1,
+                    eps=1e-6,
                 )
-                x = reg_out.gather(2, selected_scene_idxs).squeeze(2).detach()  # [b, t, k, a, 2]
+                x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
 
                 if self.hparams.interface.diff_as_target:
                     output = unnormalize(x, self.diff_mean, self.diff_std) + prev_output

@@ -14,8 +14,7 @@ class RelativeTransformer(nn.Module):
         relative_transformer_block_config,
         motion_transformer_encoder_config,
         d_agentwise_mlp,
-        d_reg_head_mlp,
-        d_cls_head_mlp,
+        d_shared_head_mlp,
         num_scenes,
         num_agents,
         dropout=0.1,
@@ -54,23 +53,18 @@ class RelativeTransformer(nn.Module):
                 ]
             )
         self.agentwise_mlp = nn.Sequential(*agentwise_mlp_layers)
-        self.reg_head = nn.Sequential(
+        self.shared_head = nn.Sequential(
             nn.Linear(
                 num_agents * d_agentwise_mlp[-1],
-                d_reg_head_mlp,
+                d_shared_head_mlp,
             ),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_reg_head_mlp, num_scenes * num_agents * 2),
-        )
-        self.cls_head = nn.Sequential(
             nn.Linear(
-                num_agents * d_agentwise_mlp[-1],
-                d_cls_head_mlp,
+                d_shared_head_mlp,
+                d_shared_head_mlp,
             ),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_cls_head_mlp, num_scenes),
+            nn.Linear(d_shared_head_mlp, num_scenes + (num_scenes * num_agents * 2) * 2),
         )
         self.num_scenes = num_scenes
         self.num_agents = num_agents
@@ -92,13 +86,20 @@ class RelativeTransformer(nn.Module):
         x_embeddings = self.agentwise_mlp(x_embeddings)
         x_embeddings = rearrange(x_embeddings, "b t a d -> b t (a d)")
 
-        reg_out = self.reg_head(x_embeddings)  # [b, t, num_paths * num_agents * 2]
+        out = self.shared_head(x_embeddings)  # [b, t, d]
 
+        cls_out = out[:, :, : self.num_scenes]  # [b, t, num_scenes]
+        shrink_out = out[
+            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 2)
+        ]  # [b, t, num_scenes * num_agents * 2]
+        shrink_out = rearrange(
+            shrink_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
+        )
+        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 2) :]
         reg_out = rearrange(
             reg_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        cls_out = self.cls_head(x_embeddings)  # [b, t, num_paths]
-        return reg_out, cls_out, inference_cache
+        return reg_out, cls_out, shrink_out, inference_cache
 
     def generate(self, x: torch.tensor, inference_cache: dict):
         """
@@ -119,20 +120,27 @@ class RelativeTransformer(nn.Module):
 
         x_embeddings = self.agentwise_mlp(x_embeddings)
         x_embeddings = rearrange(x_embeddings, "b t a d -> b t (a d)")
-        reg_out = self.reg_head(x_embeddings)  # [b, t, num_paths * num_agents * 2]
+        out = self.shared_head(x_embeddings)  # [b, t, d]
+        cls_out = out[:, :, : self.num_scenes]  # [b, t, num_scenes]
+        shrink_out = out[
+            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 2)
+        ]  # [b, t, num_scenes * num_agents * 2]
+        shrink_out = rearrange(
+            shrink_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
+        )
+        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 2) :]
         reg_out = rearrange(
             reg_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        cls_out = self.cls_head(x_embeddings)  # [b, t, num_paths]
-        return reg_out, cls_out
+        return reg_out, cls_out, shrink_out
 
 
 if __name__ == "__main__":
     model = RelativeTransformer(
         num_relative_transformer_blocks=3,
-        relative_transformer_block_config={"d_model": 64, "d_mesh": 130, "n_head": 4, "d_ff": 128},
+        relative_transformer_block_config={"d_model": 64, "d_mesh": 132, "n_head": 4, "d_ff": 128},
         motion_transformer_encoder_config={
-            "pointnet_in_channels": 2,
+            "pointnet_in_channels": 4,
             "pointnet_hidden_dim": 64,
             "pointnet_num_layers": 3,
             "pointnet_num_pre_layers": 2,
@@ -143,26 +151,30 @@ if __name__ == "__main__":
             "num_attn_layers": 3,
             "num_attn_heads": 4,
         },
-        d_agentwise_mlp=64,
-        d_reg_head_mlp=64,
-        d_cls_head_mlp=64,
+        d_agentwise_mlp=[64],
+        d_shared_head_mlp=64,
         num_scenes=10,
         num_agents=11,
+        d_traj=4,
     )
     model.eval()
-    x = torch.rand(10, 20, 11, 2)
+    x = torch.rand(10, 20, 11, 4)
     # with torch.no_grad():
-    reg_out, cls_out, inference_cache = model(x[:, :-1], return_cache=True)
+    reg_out, cls_out, shrink_out, inference_cache = model(x[:, :-1], return_cache=True)
     print(reg_out.shape)
     print(cls_out.shape)
+    print(shrink_out.shape)
 
-    reg_out_gen, cls_out_gen = model.generate(x[:, -1:], inference_cache)
+    reg_out_gen, cls_out_gen, shrink_out_gen = model.generate(x[:, -1:], inference_cache)
     print(reg_out_gen.shape)
     print(cls_out_gen.shape)
+    print(shrink_out_gen.shape)
 
-    reg_out_all, cls_out_all, _ = model(x, return_cache=False)
+    reg_out_all, cls_out_all, shrink_out_all, _ = model(x, return_cache=False)
     print(reg_out_all.shape)
     print(cls_out_all.shape)
+    print(shrink_out_all.shape)
 
     assert torch.allclose(reg_out_all[:, -1:], reg_out_gen, atol=1e-6)
     assert torch.allclose(cls_out_all[:, -1:], cls_out_gen, atol=1e-6)
+    assert torch.allclose(shrink_out_all[:, -1:], shrink_out_gen, atol=1e-6)
