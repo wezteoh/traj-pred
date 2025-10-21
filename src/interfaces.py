@@ -37,6 +37,14 @@ class BasePredictionInterface(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         raise NotImplementedError("Subclass must implement this method")
 
+    @property
+    def learning_rate(self):
+        return self.hparams.optimizer.lr
+
+    @learning_rate.setter
+    def learning_rate(self, value):
+        self.hparams.optimizer.lr = value
+
     def configure_optimizers(
         self,
     ):

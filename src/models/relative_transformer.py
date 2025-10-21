@@ -18,6 +18,7 @@ class RelativeTransformer(nn.Module):
         d_cls_head_mlp,
         num_scenes,
         num_agents,
+        dropout=0.1,
         traj_conditioning=False,
     ):
         super().__init__()
@@ -43,6 +44,7 @@ class RelativeTransformer(nn.Module):
                 d_agentwise_mlp[0],
             ),
             nn.ReLU(),
+            nn.Dropout(dropout),
         ]
         for i in range(1, len(d_agentwise_mlp)):
             agentwise_mlp_layers.extend(
@@ -58,6 +60,7 @@ class RelativeTransformer(nn.Module):
                 d_reg_head_mlp,
             ),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(d_reg_head_mlp, num_scenes * num_agents * 2),
         )
         self.cls_head = nn.Sequential(
@@ -66,6 +69,7 @@ class RelativeTransformer(nn.Module):
                 d_cls_head_mlp,
             ),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(d_cls_head_mlp, num_scenes),
         )
         self.num_scenes = num_scenes

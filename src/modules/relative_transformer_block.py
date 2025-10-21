@@ -4,6 +4,20 @@ import torch.nn.functional as F
 from einops import rearrange
 
 
+class PositionwiseFFN(nn.Module):
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.w1 = nn.Linear(d_model, d_ff, bias=False)
+        self.w3 = nn.Linear(d_model, d_ff, bias=False)
+        self.w2 = nn.Linear(d_ff, d_model, bias=False)
+        self.activation = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.w3(x) * (self.activation(self.w1(x)))
+        x = self.w2(x)
+        return x
+
+
 class RelativeDistanceAttention(nn.Module):
     def __init__(
         self,
@@ -30,12 +44,13 @@ class RelativeDistanceAttention(nn.Module):
         x_traj: [b, t, a, d]
         x_embeddings: [b, t, a, d]
         """
+        num_agents = x_traj.shape[-2]
         diff_mesh = x_traj.unsqueeze(-3) - x_traj.unsqueeze(-2)  # [b, t, a, a, d]
         q_agent_embeddings = rearrange(x_embeddings, "b t a d -> b t a 1 d").repeat(
-            1, 1, 1, diff_mesh.shape[3], 1
+            1, 1, 1, num_agents, 1
         )  # [b, t, a, a, d]
         k_agent_embeddings = rearrange(x_embeddings, "b t a d -> b t 1 a d").repeat(
-            1, 1, diff_mesh.shape[3], 1, 1
+            1, 1, num_agents, 1, 1
         )  # [b, t, a, a, d]
         if self.use_traj_diff:
             x_mesh = torch.cat(
@@ -55,7 +70,17 @@ class RelativeDistanceAttention(nn.Module):
 
 
 class RelativeTransformerBlock(nn.Module):
-    def __init__(self, d_model, d_mesh, n_head, d_ff, use_traj_diff=True):
+    def __init__(
+        self,
+        d_model,
+        d_mesh,
+        n_head,
+        d_ff,
+        dropout=0.1,
+        use_traj_diff=True,
+        use_pffn=True,
+        ln_before_ffn=True,
+    ):
         super().__init__()
         self.d_model = d_model
         self.d_mesh = d_mesh
@@ -64,20 +89,29 @@ class RelativeTransformerBlock(nn.Module):
             d_model, d_mesh, n_head, use_traj_diff
         )
 
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.SiLU(),
-            nn.Linear(d_ff, d_model),
-        )
+        if use_pffn:
+            self.ffn = PositionwiseFFN(d_model, d_ff)
+        else:
+            self.ffn = nn.Sequential(
+                nn.Linear(d_model, d_ff),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_ff, d_model),
+            )
         self.ln = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.ln_before_ffn = ln_before_ffn
 
     def forward(self, x_traj, x_embeddings):
         relative_distance_attention_out = self.relative_distance_attention(
             x_traj, self.ln(x_embeddings)
         )
-        x_embeddings = x_embeddings + relative_distance_attention_out
-        ffn_out = self.ffn(x_embeddings)
-        x_embeddings = x_embeddings + ffn_out
+        x_embeddings = x_embeddings + self.dropout(relative_distance_attention_out)
+        if self.ln_before_ffn:
+            ffn_out = self.ffn(self.ln(x_embeddings))
+        else:
+            ffn_out = self.ffn(x_embeddings)
+        x_embeddings = x_embeddings + self.dropout(ffn_out)
         return x_embeddings
 
 

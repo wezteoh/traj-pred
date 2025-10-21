@@ -1,0 +1,101 @@
+# Minimal, fast debug run on CPU
+wandb:
+  project: findlr
+  name: 4blocks-lr3e-3-decoderblockdropout-pffn-bsz384
+train:
+  seed: 0
+  validate_at_start: true
+  test: false
+  ckpt: null
+  results_dir: ~/ckpt
+  monitor_metric: jade_min
+
+# Lightning Trainer
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 32-true
+  max_epochs: 150
+  fast_dev_run: false           # one batch train/val/test and exit
+  limit_train_batches: null       # safety; only a couple batches
+  limit_val_batches: null
+  limit_test_batches: null
+  log_every_n_steps: 1
+  enable_checkpointing: true
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  
+interface:
+  name: AutoregressiveMultiplePathPredictionInterface
+  diff_as_target: true
+  diff_in_input: true
+  data_mean: [45.0, 25.0]
+  data_std: [22.5, 12.5] # we get the data to the range of -2.0 to 2.0
+  diff_mean: [0.0, 0.0]
+  diff_std: [0.75, 0.75]
+  loss_weights:
+    reg: 1.0
+    scene: 1.0
+  game: basketball
+  validation_prefix_length: 10
+  validation_max_length: 20
+  validation_num_paths: 8
+  num_id_to_upload: 3
+  num_paths_to_upload: 3
+  video_dir: ~/samples/nba50
+  upload_every_n_epochs: 5
+  masking_ratio_start: 0.00
+  masking_ratio_end: 0.00
+  masking_end_at_training_pct: 0.1
+
+dataset:
+  name: TrajectoryDataModule
+  train_bsz: 192
+  val_bsz: 1024
+  train_size: null
+  val_size: 5120
+  num_workers: 0
+  data_dir: ~/data/traj/nba
+
+# Small model for speed (used by CPU class after the code tweak below)
+model:
+  name: RelativeTransformer
+  args:
+    num_relative_transformer_blocks: 4
+    relative_transformer_block_config:
+      d_model: 128
+      d_mesh: 260
+      n_head: 8
+      d_ff: 256
+      dropout: 0.1
+      use_pffn: true
+      ln_before_ffn: true
+    motion_transformer_encoder_config:
+      pointnet_in_channels: 4
+      pointnet_hidden_dim: 64
+      pointnet_num_layers: 3
+      pointnet_num_pre_layers: 1
+      pointnet_out_channels: 64
+      entity_embedding_dim: 64
+      d_model: 128
+      use_pre_norm: true
+      num_attn_layers: 4
+      num_attn_heads: 8
+    d_agentwise_mlp: [64]
+    d_reg_head_mlp: 512
+    d_cls_head_mlp: 256
+    num_scenes: 10
+    num_agents: 11
+    traj_conditioning: true
+    d_traj: 4
+    dropout: 0.0
+
+# Optimizer
+optimizer:
+  lr: 0.003
+  weight_decay: 0.01
+  lr_schedule:
+    div_factor: 15
+    final_div_factor: 300
+    pct_start: 0.1
+    total_steps: null

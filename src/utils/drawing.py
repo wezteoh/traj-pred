@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from imageio import mimsave
 from matplotlib.axes import Axes
+from mplsoccer import Pitch
 
 """
 This is a modified version of the mplbasketball library.
@@ -1652,6 +1653,58 @@ def create_basketball_frame(pts: np.ndarray) -> np.ndarray:
     return rgb
 
 
+def create_soccer_frame(pts: np.ndarray) -> np.ndarray:
+    """
+    create a soccer frame
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5.75), dpi=32)
+    pitch = Pitch(pitch_color=None, line_color="grey", stripe=False)
+    pitch.draw(ax=ax)
+    pts = pts / np.array([[3840, 2160]]) * np.array([[105, 68]])
+    for pt in pts[-1:]:
+        pitch.scatter(pt[0], pt[1], color="red", ax=ax)
+    for pt in pts[0:11]:
+        pitch.scatter(pt[0], pt[1], color="blue", ax=ax)
+    for pt in pts[11:22]:
+        pitch.scatter(pt[0], pt[1], color="green", ax=ax)
+    fig.canvas.draw()  # ensure the renderer has drawn
+    w, h = fig.canvas.get_width_height()
+    if hasattr(fig.canvas, "buffer_rgba"):
+        rgba = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)
+    elif hasattr(fig.canvas, "tostring_argb"):
+        argb = np.asarray(fig.canvas.tostring_argb(), dtype=np.uint8)
+        rgba = argb[..., [1, 2, 3, 0]]
+    rgb = rgba[..., :3]
+    plt.close(fig)  # avoid memory leak
+    return rgb
+
+
+def create_football_frame(pts: np.ndarray) -> np.ndarray:
+    """
+    create a football frame
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4.5), dpi=32)
+    pts = pts / np.array([[120, 53.3]]) * np.array([[640, 288]])
+    for pt in pts[-1:]:
+        ax.scatter(pt[0], pt[1], color="red")
+    for pt in pts[0:11]:
+        ax.scatter(pt[0], pt[1], color="blue")
+    for pt in pts[11:22]:
+        ax.scatter(pt[0], pt[1], color="green")
+    ax.set_xlim(0, 640)
+    ax.set_ylim(0, 288)
+    fig.canvas.draw()  # ensure the renderer has drawn
+    w, h = fig.canvas.get_width_height()
+    if hasattr(fig.canvas, "buffer_rgba"):
+        rgba = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)
+    elif hasattr(fig.canvas, "tostring_argb"):
+        argb = np.asarray(fig.canvas.tostring_argb(), dtype=np.uint8)
+        rgba = argb[..., [1, 2, 3, 0]]
+    rgb = rgba[..., :3]
+    plt.close(fig)  # avoid memory leak
+    return rgb
+
+
 def create_frames_from_trajectory(trajectory: np.ndarray, game: str) -> list[np.ndarray]:
     """
     create frames from a trajectory
@@ -1660,6 +1713,10 @@ def create_frames_from_trajectory(trajectory: np.ndarray, game: str) -> list[np.
     for pts in trajectory:
         if game == "basketball":
             frame = create_basketball_frame(pts)
+        elif game == "soccer":
+            frame = create_soccer_frame(pts)
+        elif game == "football":
+            frame = create_football_frame(pts)
         else:
             raise ValueError(f"Unknown game: {game}")
         frames.append(frame)

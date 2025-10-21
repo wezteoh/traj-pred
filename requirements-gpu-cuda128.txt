@@ -14,6 +14,7 @@ scipy==1.13.1
 imageio==2.37.0
 imageio-ffmpeg==0.6.0
 matplotlib==3.10.6
+mplsoccer==1.5.1
 # https://github.com/state-spaces/mamba/releases/download/v2.2.5/mamba_ssm-2.2.5+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl # mamba-ssm
 # https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.2/causal_conv1d-1.5.2+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl # causal-conv1d
 # https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl # flash-attention
