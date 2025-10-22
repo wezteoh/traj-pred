@@ -171,6 +171,17 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
         return x, y, batch
 
+    def get_test_inputs(self, batch: torch.tensor, prefix_length: int):
+        batch_truncated = batch[:, :prefix_length]
+        x = normalize(batch_truncated, self.data_mean, self.data_std)
+        if self.hparams.interface.diff_in_input:
+            diff = torch.diff(batch_truncated, dim=1)
+            diff_n = normalize(diff, self.diff_mean, self.diff_std)
+            diff_n = torch.cat([torch.zeros_like(diff_n[:, :1]), diff_n], dim=1)
+            x = torch.cat([x, diff_n], dim=-1)
+        x = cast_floats_by_trainer_precision(x, precision=self.trainer.precision)
+        return x
+
     def forward(self, x: torch.tensor):
         pred, scene_logits, shrink, _ = self.model(x)
         return pred, scene_logits, shrink
@@ -480,12 +491,13 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         }
 
     def test_step(self, batch, batch_idx):
-        x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
+        gt_path_original_scale = batch
+        x = self.get_test_inputs(batch, self.hparams.test.prefix_length)
 
         record_step = {}
 
         samples_original_scale, k_idxs = self.sample(
-            x[:, : self.hparams.test.prefix_length],
+            x,
             max_length=self.hparams.test.max_length,
             num_paths=self.hparams.test.num_paths,
             temperature=self.hparams.test.temperature,
