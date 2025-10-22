@@ -16,7 +16,9 @@ from src.utils.data import cast_floats_by_trainer_precision, normalize, unnormal
 from src.utils.drawing import create_frames_from_trajectory, create_video_from_frames
 from src.utils.misc import (
     categorical_entropy,
+    nll_mog_block2d,
     nll_molaplace_soft_vector_diagonal,
+    sample_mog_block2d,
     sample_mol_laplace_diagonal,
 )
 
@@ -177,13 +179,12 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
     def training_step(self, batch, batch_idx):
         x, y, _ = self.make_model_inputs_and_targets(batch)
-        pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
-
-        nll = nll_molaplace_soft_vector_diagonal(
-            y=rearrange(y, "b t a d -> (b t) (a d)"),
-            mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
+        pred, scene_logits, cov = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
+        nll = nll_mog_block2d(
+            y=rearrange(y, "b t a d -> (b t) a d"),
+            mu=rearrange(pred, "b t k a d -> (b t) k a d"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
-            beta=rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+            L_packed=rearrange(cov, "b t k a d -> (b t) k a d"),
             eps=1e-6,
             reduction="mean",
         )
@@ -208,12 +209,12 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
     def validation_step(self, batch, batch_idx):
         x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
-        pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
-        nll = nll_molaplace_soft_vector_diagonal(
-            y=rearrange(y, "b t a d -> (b t) (a d)"),
-            mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
+        pred, scene_logits, cov = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
+        nll = nll_mog_block2d(
+            y=rearrange(y, "b t a d -> (b t) a d"),
+            mu=rearrange(pred, "b t k a d -> (b t) k a d"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
-            beta=rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+            L_packed=rearrange(cov, "b t k a d -> (b t) k a d"),
             eps=1e-6,
             reduction="mean",
         )
@@ -327,27 +328,26 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         num_agents = x.shape[2]
         assert max_length > 1, "max_length must be greater than 1"
         samples = []
-        init_reg_out, init_cls_out, init_shrink, init_inference_cache = self.model(
+        init_reg_out, init_cls_out, init_cov, init_inference_cache = self.model(
             x, return_cache=True
         )
         init_cls_out = init_cls_out.detach()[:, -1]  # (b, k)
         init_reg_out = init_reg_out.detach()[:, -1:]  # [b, 1, k, a, 2]
-        init_shrink = init_shrink.detach()[:, -1:]  # [b, 1, k, a, 2]
+        init_cov = init_cov.detach()[:, -1:]  # [b, 1, k, a, 2]
 
         samples = []
         k_idxs = []
         init_prev_output = unnormalize(x[:, -1:, :, :2], self.data_mean, self.data_std)
         for _ in range(num_paths):
-            x, k_idx = sample_mol_laplace_diagonal(
-                rearrange(init_reg_out, "b t k a d -> (b t) k (a d)"),
+            x, k_idx = sample_mog_block2d(
+                rearrange(init_reg_out, "b t k a d -> (b t) k a d"),
                 init_cls_out,
-                rearrange(init_shrink, "b t k a d -> (b t) k (a d)"),
+                rearrange(init_cov, "b t k a d -> (b t) k a d"),
                 S=1,
                 eps=1e-6,
                 mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
                 pi_temperature=temperature,
             )
-            x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
             if self.hparams.interface.diff_as_target:
                 output = unnormalize(x, self.diff_mean, self.diff_std) + init_prev_output
             else:
@@ -370,17 +370,16 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             prev_output = output
 
             for t in range(max_length - 1):
-                reg_out, cls_out, shrink = self.model.generate(input, inference_cache)
-                x, k_idx = sample_mol_laplace_diagonal(
-                    rearrange(reg_out, "b t k a d -> (b t) k (a d)"),
+                reg_out, cls_out, cov = self.model.generate(input, inference_cache)
+                x, k_idx = sample_mog_block2d(
+                    rearrange(reg_out, "b t k a d -> (b t) k a d"),
                     rearrange(cls_out, "b 1 k -> b k"),
-                    rearrange(shrink, "b t k a d -> (b t) k (a d)"),
+                    rearrange(cov, "b t k a d -> (b t) k a d"),
                     S=1,
                     eps=1e-6,
                     mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
                     pi_temperature=temperature,
                 )
-                x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
 
                 if self.hparams.interface.diff_as_target:
                     output = unnormalize(x, self.diff_mean, self.diff_std) + prev_output

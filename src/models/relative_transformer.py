@@ -1,3 +1,5 @@
+from sqlite3.dbapi2 import converters
+
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -64,7 +66,10 @@ class RelativeTransformer(nn.Module):
                 d_shared_head_mlp,
             ),
             nn.ReLU(),
-            nn.Linear(d_shared_head_mlp, num_scenes + (num_scenes * num_agents * 2) * 2),
+            nn.Linear(
+                d_shared_head_mlp,
+                num_scenes + (num_scenes * num_agents * 3) + (num_scenes * num_agents * 2),
+            ),
         )
         self.num_scenes = num_scenes
         self.num_agents = num_agents
@@ -89,17 +94,17 @@ class RelativeTransformer(nn.Module):
         out = self.shared_head(x_embeddings)  # [b, t, d]
 
         cls_out = out[:, :, : self.num_scenes]  # [b, t, num_scenes]
-        shrink_out = out[
-            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 2)
+        cov_out = out[
+            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 3)
         ]  # [b, t, num_scenes * num_agents * 2]
-        shrink_out = rearrange(
-            shrink_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
+        cov_out = rearrange(
+            cov_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 2) :]
+        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 3) :]
         reg_out = rearrange(
             reg_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        return reg_out, cls_out, shrink_out, inference_cache
+        return reg_out, cls_out, cov_out, inference_cache
 
     def generate(self, x: torch.tensor, inference_cache: dict):
         """
@@ -122,17 +127,17 @@ class RelativeTransformer(nn.Module):
         x_embeddings = rearrange(x_embeddings, "b t a d -> b t (a d)")
         out = self.shared_head(x_embeddings)  # [b, t, d]
         cls_out = out[:, :, : self.num_scenes]  # [b, t, num_scenes]
-        shrink_out = out[
-            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 2)
-        ]  # [b, t, num_scenes * num_agents * 2]
-        shrink_out = rearrange(
-            shrink_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
+        cov_out = out[
+            :, :, self.num_scenes : self.num_scenes + (self.num_scenes * self.num_agents * 3)
+        ]  # [b, t, num_scenes * num_agents * 3]
+        cov_out = rearrange(
+            cov_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 2) :]
+        reg_out = out[:, :, self.num_scenes + (self.num_scenes * self.num_agents * 3) :]
         reg_out = rearrange(
             reg_out, "b t (k a d) -> b t k a d", k=self.num_scenes, a=self.num_agents
         )
-        return reg_out, cls_out, shrink_out
+        return reg_out, cls_out, cov_out
 
 
 if __name__ == "__main__":
