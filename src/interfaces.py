@@ -14,7 +14,11 @@ from torch.optim.lr_scheduler import OneCycleLR
 from src.models import get_model
 from src.utils.data import cast_floats_by_trainer_precision, normalize, unnormalize
 from src.utils.drawing import create_frames_from_trajectory, create_video_from_frames
-from src.utils.misc import nll_molaplace_soft_vector_diagonal, sample_mol_laplace_diagonal
+from src.utils.misc import (
+    categorical_entropy,
+    nll_molaplace_soft_vector_diagonal,
+    sample_mol_laplace_diagonal,
+)
 
 
 class BasePredictionInterface(pl.LightningModule):
@@ -134,7 +138,10 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         self.model = get_model(
             name=self.hparams.model.name,
             model_args=self.hparams.model.args,
-            device="cuda" if config.trainer.accelerator == "gpu" else "cpu",
+        )
+        self.validation_kidxs = torch.zeros(
+            self.hparams.model.args.num_scenes,
+            dtype=torch.long,
         )
 
     def make_model_inputs_and_targets(self, batch: torch.tensor):
@@ -172,7 +179,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         x, y, _ = self.make_model_inputs_and_targets(batch)
         pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
 
-        loss = nll_molaplace_soft_vector_diagonal(
+        nll = nll_molaplace_soft_vector_diagonal(
             y=rearrange(y, "b t a d -> (b t) (a d)"),
             mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
@@ -180,8 +187,12 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             eps=1e-6,
             reduction="mean",
         )
+        entropy = categorical_entropy(scene_logits)
+        loss = nll - self.hparams.interface.entropy_weight * entropy
         record_step = {
             "trainer_loss": loss.item(),
+            "trainer_nll": nll.item(),
+            "trainer_entropy": entropy.item(),
         }
 
         self.log_dict(
@@ -198,7 +209,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
     def validation_step(self, batch, batch_idx):
         x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
         pred, scene_logits, shrink = self.forward(x)  # [b, t, k, a, 2], [b, t, k], [b, t, k, a, 2]
-        loss = nll_molaplace_soft_vector_diagonal(
+        nll = nll_molaplace_soft_vector_diagonal(
             y=rearrange(y, "b t a d -> (b t) (a d)"),
             mu=rearrange(pred, "b t k a d -> (b t) k (a d)"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
@@ -206,15 +217,23 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             eps=1e-6,
             reduction="mean",
         )
+        entropy = categorical_entropy(scene_logits)
+        loss = nll - self.hparams.interface.entropy_weight * entropy
         record_step = {
+            "validation_nll": nll.item(),
+            "validation_entropy": entropy.item(),
             "validation_loss": loss.item(),
         }
 
-        samples_original_scale = self.sample(
+        samples_original_scale, k_idxs = self.sample(
             x[:, : self.hparams.interface.validation_prefix_length],
             max_length=self.hparams.interface.validation_max_length,
             num_paths=self.hparams.interface.validation_num_paths,
         )  # [b, num_paths, t, num_agents, 2]
+
+        self.validation_kidxs += torch.bincount(
+            k_idxs.flatten(), minlength=self.hparams.model.args.num_scenes
+        ).cpu()
         metric_dict = self.compute_jade_jfde(
             samples_original_scale,
             gt_path_original_scale[
@@ -291,6 +310,16 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
         return loss
 
+    def on_validation_epoch_end(self):
+        super().on_validation_epoch_end()
+        print(f"validation kidxs: {self.validation_kidxs}")
+        self.validation_kidxs.zero_()
+
+    def on_test_epoch_end(self):
+        super().on_test_epoch_end()
+        print(f"test kidxs: {self.validation_kidxs}")
+        self.validation_kidxs.zero_()
+
     def sample(self, x: torch.tensor, max_length: int, num_paths: int, temperature: float = 1.0):
         """
         x: [b, t, num_agents, 2]
@@ -306,6 +335,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         init_shrink = init_shrink.detach()[:, -1:]  # [b, 1, k, a, 2]
 
         samples = []
+        k_idxs = []
         init_prev_output = unnormalize(x[:, -1:, :, :2], self.data_mean, self.data_std)
         for _ in range(num_paths):
             x, k_idx = sample_mol_laplace_diagonal(
@@ -314,6 +344,8 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                 rearrange(init_shrink, "b t k a d -> (b t) k (a d)"),
                 S=1,
                 eps=1e-6,
+                mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
+                pi_temperature=temperature,
             )
             x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
             if self.hparams.interface.diff_as_target:
@@ -334,6 +366,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
             inference_cache = deepcopy(init_inference_cache)
             preds = [output]
+            k_idxs_one_path = [k_idx]
             prev_output = output
 
             for t in range(max_length - 1):
@@ -344,6 +377,8 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                     rearrange(shrink, "b t k a d -> (b t) k (a d)"),
                     S=1,
                     eps=1e-6,
+                    mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
+                    pi_temperature=temperature,
                 )
                 x = rearrange(x, "b 1 (a d) -> b 1 a d", a=num_agents)
 
@@ -363,10 +398,13 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                 else:
                     input = normalize(output, self.data_mean, self.data_std)
                 preds.append(output)
+                k_idxs_one_path.append(k_idx)
                 prev_output = output
+            k_idxs.append(torch.cat(k_idxs_one_path, dim=0))
             samples.append(torch.cat(preds, dim=1))  # [b, t, a, 2]
         samples = torch.stack(samples, dim=1)  # [b, num_paths, t, a, 2]
-        return samples
+        k_idxs = torch.stack(k_idxs, dim=0)  # [b, num_paths, t]
+        return samples, k_idxs
 
     def compute_jade_jfde(self, samples, y):
         """
@@ -446,12 +484,15 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
 
         record_step = {}
 
-        samples_original_scale = self.sample(
+        samples_original_scale, k_idxs = self.sample(
             x[:, : self.hparams.test.prefix_length],
             max_length=self.hparams.test.max_length,
             num_paths=self.hparams.test.num_paths,
             temperature=self.hparams.test.temperature,
         )  # [b, num_paths, t, num_agents, 2]
+        self.validation_kidxs += torch.bincount(
+            k_idxs.flatten(), minlength=self.hparams.model.args.num_scenes
+        ).cpu()
         metric_dict = self.compute_jade_jfde(
             samples_original_scale,
             gt_path_original_scale[
