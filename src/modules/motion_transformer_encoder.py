@@ -37,10 +37,11 @@ class MotionTransformerEncoder(nn.Module):
         use_pre_norm,
         num_attn_layers,
         num_attn_heads,
+        team_size,
     ):
         super().__init__()
 
-        # build polyline encoders
+        self.team_size = team_size  # build polyline encoders
         self.agent_polyline_encoder = SequentialPointNetPolylineEncoder(
             in_channels=pointnet_in_channels,
             hidden_dim=pointnet_hidden_dim,
@@ -79,7 +80,12 @@ class MotionTransformerEncoder(nn.Module):
         team_two_query = self.team_two_query_embedding(index)
         ball_query = self.ball_query_embedding(index)
         agent_query = torch.cat(
-            [team_one_query.repeat(5, 1), team_two_query.repeat(5, 1), ball_query], dim=0
+            [
+                team_one_query.repeat(self.team_size, 1),
+                team_two_query.repeat(self.team_size, 1),
+                ball_query,
+            ],
+            dim=0,
         )
         return agent_query  # [A, D]
 

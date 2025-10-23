@@ -160,7 +160,7 @@ def nll_mog_block2d(
     """
     assert (L_packed is not None) ^ (L_raw is not None), "Provide exactly one of L_packed or L_raw"
     B, K, P, two = mu.shape
-    assert two == 2 and P == 11, "mu must be [B,K,11,2]"
+    assert two == 2, "mu must be [B,K,A,2]"
     assert y.shape == (B, P, two)
     assert log_pi.shape == (B, K)
 
@@ -225,7 +225,7 @@ def sample_mog_block2d(
     """
     assert (L_packed is not None) ^ (L_raw is not None), "Provide exactly one of L_packed or L_raw"
     B, K, P, two = mu.shape
-    assert P == 11 and two == 2, "mu must be [B,K,11,2]"
+    assert two == 2, "mu must be [B,K,A,2]"
     assert log_pi.shape == (B, K)
 
     device = mu.device
