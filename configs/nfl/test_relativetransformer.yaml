@@ -1,0 +1,8 @@
+test:
+  video_dir: ~/samples/nfl
+  num_paths: 20
+  prefix_length: 30
+  max_length: 20
+  num_id_to_upload: 5
+  num_paths_to_upload: 5
+  temperature: 1.0
