@@ -33,7 +33,11 @@ class RelativeTransformer(nn.Module):
                 for _ in range(num_relative_transformer_blocks)
             ]
         )
-        self.post_decoder_act = nn.ReLU()
+        self.post_norm = nn.LayerNorm(
+            relative_transformer_block_config["d_model"]
+            if self.decoder_blocks
+            else motion_transformer_encoder_config["d_model"]
+        )
         # use num agentwise_mlp layers to set
         agentwise_mlp_layers = [
             nn.Linear(
@@ -80,10 +84,11 @@ class RelativeTransformer(nn.Module):
         if return_cache:
             inference_cache["past_encoder_cache"] = past_encoder_cache
 
-        for block in self.decoder_blocks:
-            x_embeddings = block(x_traj, x_embeddings)  # [b, t, a, d]
+        if self.decoder_blocks:
+            for block in self.decoder_blocks:
+                x_embeddings = block(x_traj, x_embeddings)  # [b, t, a, d]
 
-        x_embeddings = self.post_decoder_act(x_embeddings)
+        x_embeddings = self.post_norm(x_embeddings)
 
         if self.traj_conditioning:
             x_embeddings = torch.cat([x_embeddings, x_traj], dim=-1)
@@ -115,10 +120,11 @@ class RelativeTransformer(nn.Module):
             x, inference_cache["past_encoder_cache"]
         )  # x_embeddings: [b, 1, a, d]
 
-        for block in self.decoder_blocks:
-            x_embeddings = block(x, x_embeddings)  # [b, 1, a, d]
+        if self.decoder_blocks:
+            for block in self.decoder_blocks:
+                x_embeddings = block(x, x_embeddings)  # [b, 1, a, d]
 
-        x_embeddings = self.post_decoder_act(x_embeddings)
+        x_embeddings = self.post_norm(x_embeddings)
 
         if self.traj_conditioning:
             x_embeddings = torch.cat([x_embeddings, x], dim=-1)

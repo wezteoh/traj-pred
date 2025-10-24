@@ -185,7 +185,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             mu=rearrange(pred, "b t k a d -> (b t) k a d"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
             L_packed=rearrange(cov, "b t k a d -> (b t) k a d"),
-            eps=1e-6,
+            eps=getattr(self.hparams.interface, "min_std", 5e-2),
             reduction="mean",
         )
         entropy = categorical_entropy(scene_logits)
@@ -215,7 +215,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             mu=rearrange(pred, "b t k a d -> (b t) k a d"),
             log_pi=rearrange(scene_logits, "b t k -> (b t) k"),
             L_packed=rearrange(cov, "b t k a d -> (b t) k a d"),
-            eps=1e-6,
+            eps=getattr(self.hparams.interface, "min_std", 5e-2),
             reduction="mean",
         )
         entropy = categorical_entropy(scene_logits)
@@ -344,7 +344,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                 init_cls_out,
                 rearrange(init_cov, "b t k a d -> (b t) k a d"),
                 S=1,
-                eps=1e-6,
+                eps=getattr(self.hparams.interface, "min_std", 5e-2),
                 mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
                 pi_temperature=temperature,
             )
@@ -376,7 +376,7 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
                     rearrange(cls_out, "b 1 k -> b k"),
                     rearrange(cov, "b t k a d -> (b t) k a d"),
                     S=1,
-                    eps=1e-6,
+                    eps=getattr(self.hparams.interface, "min_std", 5e-2),
                     mean_sampling=getattr(self.hparams.interface, "mean_sampling", False),
                     pi_temperature=temperature,
                 )
