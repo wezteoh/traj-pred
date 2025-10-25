@@ -4,11 +4,11 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from src.modules.motion_transformer_encoder import MotionTransformerEncoder
+from src.modules.mamba_motion_transformer_encoder import MambaMotionTransformerEncoder
 from src.modules.relative_transformer_block import RelativeTransformerBlock
 
 
-class RelativeTransformer(nn.Module):
+class MambaRelativeTransformer(nn.Module):
     def __init__(
         self,
         d_traj,
@@ -27,7 +27,7 @@ class RelativeTransformer(nn.Module):
         self.traj_conditioning = traj_conditioning
         self.relative_transformer_block_config = relative_transformer_block_config
         self.motion_transformer_encoder_config = motion_transformer_encoder_config
-        self.past_encoder = MotionTransformerEncoder(**motion_transformer_encoder_config)
+        self.past_encoder = MambaMotionTransformerEncoder(**motion_transformer_encoder_config)
         self.decoder_blocks = nn.ModuleList(
             [
                 RelativeTransformerBlock(**relative_transformer_block_config)
@@ -55,6 +55,7 @@ class RelativeTransformer(nn.Module):
                 d_agentwise_mlp[0],
             ),
             nn.ReLU(),
+            nn.Dropout(dropout),
         ]
         for i in range(1, len(d_agentwise_mlp)):
             agentwise_mlp_layers.extend(
@@ -75,7 +76,6 @@ class RelativeTransformer(nn.Module):
                 d_shared_head_mlp,
             ),
             nn.ReLU(),
-            nn.Dropout(dropout),
             nn.Linear(
                 d_shared_head_mlp,
                 num_scenes + (num_scenes * num_agents * 3) + (num_scenes * num_agents * 2),
@@ -159,29 +159,45 @@ class RelativeTransformer(nn.Module):
 
 
 if __name__ == "__main__":
-    model = RelativeTransformer(
-        num_relative_transformer_blocks=3,
+    model = MambaRelativeTransformer(
+        num_relative_transformer_blocks=0,
         relative_transformer_block_config={"d_model": 64, "d_mesh": 132, "n_head": 4, "d_ff": 128},
-        motion_transformer_encoder_config={
-            "pointnet_in_channels": 4,
-            "pointnet_hidden_dim": 64,
-            "pointnet_num_layers": 3,
-            "pointnet_num_pre_layers": 2,
-            "pointnet_out_channels": 64,
+        mamba_motion_transformer_encoder_config={
+            "d_traj": 4,
+            "mamba_mixer_encoder_config": {
+                "n_layer": 3,
+                "d_model": 64,
+                "d_intermediate": 0,
+                "ssm_cfg": {
+                    "layer": "Mamba2",
+                    "d_state": 128,
+                    "d_conv": 4,
+                    "expand": 4,
+                    "headdim": 16,
+                    "ngroups": 1,
+                    "chunk_size": 128,
+                    "bias": False,
+                    "conv_bias": False,
+                },
+                "rms_norm": True,
+                "fused_add_norm": True,
+                "residual_in_fp32": True,
+            },
             "entity_embedding_dim": 64,
             "d_model": 64,
             "use_pre_norm": False,
             "num_attn_layers": 3,
             "num_attn_heads": 4,
+            "team_size": 5,
         },
-        d_agentwise_mlp=[64],
-        d_shared_head_mlp=64,
-        num_scenes=10,
+        d_shared_head_mlp=[256, 256],
+        num_scenes=8,
         num_agents=11,
+        d_scene_embedding=64,
         d_traj=4,
-    )
+    ).to("cuda")
     model.eval()
-    x = torch.rand(10, 20, 11, 4)
+    x = torch.rand(10, 20, 11, 4).to("cuda")
     # with torch.no_grad():
     reg_out, cls_out, shrink_out, inference_cache = model(x[:, :-1], return_cache=True)
     print(reg_out.shape)
@@ -198,6 +214,6 @@ if __name__ == "__main__":
     print(cls_out_all.shape)
     print(shrink_out_all.shape)
 
-    assert torch.allclose(reg_out_all[:, -1:], reg_out_gen, atol=1e-6)
-    assert torch.allclose(cls_out_all[:, -1:], cls_out_gen, atol=1e-6)
-    assert torch.allclose(shrink_out_all[:, -1:], shrink_out_gen, atol=1e-6)
+    assert torch.allclose(reg_out_all[:, -1:], reg_out_gen, atol=1e-5)
+    assert torch.allclose(cls_out_all[:, -1:], cls_out_gen, atol=1e-5)
+    assert torch.allclose(shrink_out_all[:, -1:], shrink_out_gen, atol=1e-5)

@@ -1,7 +1,7 @@
 # Minimal, fast debug run on CPU
 wandb:
   project: relativetransformer-nfl
-  name: relativetransformer-mog-4blocks-lr2e-3-entropy
+  name: relativetransformer-combinedscenes-mog-nodecoder-postact
 train:
   seed: 0
   validate_at_start: true
@@ -51,7 +51,7 @@ interface:
 dataset:
   name: TrajectoryDataModule
   train_bsz: 128
-  val_bsz: 384
+  val_bsz: 512
   train_size: null
   val_size: 2560
   num_workers: 0
@@ -61,7 +61,7 @@ dataset:
 model:
   name: RelativeTransformer
   args:
-    num_relative_transformer_blocks: 4
+    num_relative_transformer_blocks: 0
     relative_transformer_block_config:
       d_model: 128
       d_mesh: 260
@@ -70,6 +70,7 @@ model:
       dropout: 0.1
       use_pffn: true
       ln_before_ffn: true
+    use_post_norm: false
     motion_transformer_encoder_config:
       pointnet_in_channels: 4
       pointnet_hidden_dim: 64
@@ -79,12 +80,11 @@ model:
       entity_embedding_dim: 64
       d_model: 128
       use_pre_norm: true
-      num_attn_layers: 4
+      num_attn_layers: 8
       num_attn_heads: 8
       team_size: 11
-    use_post_norm: false
     d_agentwise_mlp: [48]
-    d_shared_head_mlp: 768
+    d_shared_head_mlp: 1024
     num_scenes: 8
     num_agents: 23
     traj_conditioning: true
