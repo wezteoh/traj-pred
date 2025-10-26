@@ -75,7 +75,7 @@ class MambaRelativeTransformer(nn.Module):
                 d_shared_head_mlp,
             ),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(
                 d_shared_head_mlp,
                 num_scenes + (num_scenes * num_agents * 3) + (num_scenes * num_agents * 2),

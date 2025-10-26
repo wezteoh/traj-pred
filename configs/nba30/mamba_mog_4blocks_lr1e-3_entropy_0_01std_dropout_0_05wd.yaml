@@ -1,7 +1,7 @@
 # Minimal, fast debug run on CPU
 wandb:
   project: relativetransformer-nba30
-  name: mamba-mog-4blocks-lr2e-3-entropy-0.01std
+  name: mamba-mog-4blocks-lr1e-3-entropy-0.01std-dropout-0.05wd
 train:
   seed: 0
   validate_at_start: true
@@ -107,7 +107,7 @@ model:
 # Optimizer
 optimizer:
   lr: 0.001
-  weight_decay: 0.01
+  weight_decay: 0.05
   lr_schedule:
     div_factor: 15
     final_div_factor: 200
