@@ -55,7 +55,6 @@ class MambaRelativeTransformer(nn.Module):
                 d_agentwise_mlp[0],
             ),
             nn.ReLU(),
-            nn.Dropout(dropout),
         ]
         for i in range(1, len(d_agentwise_mlp)):
             agentwise_mlp_layers.extend(
@@ -76,6 +75,7 @@ class MambaRelativeTransformer(nn.Module):
                 d_shared_head_mlp,
             ),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(
                 d_shared_head_mlp,
                 num_scenes + (num_scenes * num_agents * 3) + (num_scenes * num_agents * 2),

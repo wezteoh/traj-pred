@@ -47,6 +47,7 @@ interface:
   masking_end_at_training_pct: 0.1
   entropy_weight: 0.05
   min_std: 0.000001
+  use_post_norm: false
 
 dataset:
   name: TrajectoryDataModule
