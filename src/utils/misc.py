@@ -239,34 +239,39 @@ def sample_mog_block2d(
         assert L_raw.shape == (B, K, P, 2, 2)
         L = _sanitize_L_raw(L_raw, eps=eps)  # [B,K,11,2,2]
 
-    # Mixture component sampling
-    pi = torch.softmax(log_pi, dim=-1)  # [B,K]
-    cat = torch.distributions.Categorical(pi)
-    # sample S components independently per batch item
-    k_idx = cat.sample((S,)).transpose(0, 1)  # [B,S]
+    if K == 1:
+        mu_sel = mu[:, :1, ...].expand(B, S, P, two)  # [B,S,11,2]
+        L_sel = L[:, :1, ...].expand(B, S, P, two, two)  # [B,S,11,2,2]
+        k_idx = torch.zeros(B, S, dtype=torch.long, device=mu.device)
+    else:
+        # Mixture component sampling
+        pi = torch.softmax(log_pi, dim=-1)  # [B,K]
+        cat = torch.distributions.Categorical(pi)
+        # sample S components independently per batch item
+        k_idx = cat.sample((S,)).transpose(0, 1)  # [B,S]
 
-    # Gather chosen component parameters
-    # expand K-dim gather with an extra S axis
-    mu_sel = (
-        mu.unsqueeze(1)
-        .gather(
-            dim=2, index=k_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(B, S, 1, P, two)
-        )
-        .squeeze(2)
-    )  # [B,S,11,2]
+        # Gather chosen component parameters
+        # expand K-dim gather with an extra S axis
+        mu_sel = (
+            mu.unsqueeze(1)
+            .gather(
+                dim=2, index=k_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(B, S, 1, P, two)
+            )
+            .squeeze(2)
+        )  # [B,S,11,2]
 
-    L_sel = (
-        L.unsqueeze(1)
-        .gather(
-            dim=2,
-            index=k_idx.unsqueeze(-1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .expand(B, S, 1, P, two, two),
-        )
-        .squeeze(2)
-    )  # [B,S,11,2,2]
+        L_sel = (
+            L.unsqueeze(1)
+            .gather(
+                dim=2,
+                index=k_idx.unsqueeze(-1)
+                .unsqueeze(-1)
+                .unsqueeze(-1)
+                .unsqueeze(-1)
+                .expand(B, S, 1, P, two, two),
+            )
+            .squeeze(2)
+        )  # [B,S,11,2,2]
 
     # Sample standard normals per block (2D), then transform by Cholesky
     eps = torch.randn(B, S, P, two, 1, device=device, dtype=dtype)  # [B,S,11,2,1]

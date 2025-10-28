@@ -26,6 +26,9 @@ def parse_args():
     p.add_argument("--base-config-path", default="configs")
     p.add_argument("--test-config-path", default="configs/nba50/test_relativetransformer.yaml")
     p.add_argument("--ckpt", default=None)
+    p.add_argument("--test-size", default=None, type=int)
+    p.add_argument("--bsz", default=1024, type=int)
+    p.add_argument("--mean-sampling", action="store_true")
     return p.parse_args()
 
 
@@ -36,6 +39,9 @@ def main():
     cfg = OmegaConf.merge(cfg, test_cfg)
     OmegaConf.set_struct(cfg, False)
     cfg.train.ckpt = args.ckpt
+    cfg.dataset.val_size = args.test_size
+    cfg.dataset.val_bsz = args.bsz
+    cfg.interface.mean_sampling = args.mean_sampling
     run_test(cfg)
 
 

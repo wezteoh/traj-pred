@@ -3,6 +3,8 @@ test:
   num_paths: 20
   prefix_length: 10
   max_length: 20
-  num_id_to_upload: 5
+  num_id_to_upload: 0
   num_paths_to_upload: 5
   temperature: 1.0
+  compute_multiple_of_5frames: true
+  feet2metre: true

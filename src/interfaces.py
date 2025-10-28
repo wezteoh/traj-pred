@@ -188,7 +188,10 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             eps=getattr(self.hparams.interface, "min_std", 5e-2),
             reduction="mean",
         )
-        entropy = categorical_entropy(scene_logits)
+        if pred.shape[2] > 1:
+            entropy = categorical_entropy(scene_logits)
+        else:
+            entropy = torch.tensor(0.0).to(scene_logits.device)
         loss = nll - self.hparams.interface.entropy_weight * entropy
         record_step = {
             "trainer_loss": loss.item(),
@@ -218,7 +221,10 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             eps=getattr(self.hparams.interface, "min_std", 5e-2),
             reduction="mean",
         )
-        entropy = categorical_entropy(scene_logits)
+        if pred.shape[2] > 1:
+            entropy = categorical_entropy(scene_logits)
+        else:
+            entropy = torch.tensor(0.0).to(scene_logits.device)
         loss = nll - self.hparams.interface.entropy_weight * entropy
         record_step = {
             "validation_nll": nll.item(),
@@ -405,6 +411,43 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         k_idxs = torch.stack(k_idxs, dim=0)  # [b, num_paths, t]
         return samples, k_idxs
 
+    def compute_metrics_multiple_of_5frames(self, samples, y):
+        """
+        samples: [b, num_paths, t, a, 2]
+        y: [b, t, num_agents, 2]
+        """
+        output_dict = {}
+        for i in range(0, samples.shape[2], 5):
+            distances = (samples[:, :, : i + 5, :, :] - y[:, : i + 5, :, :].unsqueeze(1)).norm(
+                p=2, dim=-1
+            )  # [b, num_paths, t, num_agents]
+            jade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
+            jade_all = jade_path_agentwise.mean(dim=-1)  # [b, num_paths]
+            jade_mean = jade_all.mean()
+            jade_min = jade_all.min(dim=-1).values.mean()
+
+            jfde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
+            jfde_all = jfde_path_agentwise.mean(dim=-1)  # [b, num_paths]
+            jfde_mean = jfde_all.mean()
+            jfde_min = jfde_all.min(dim=-1).values.mean()
+
+            ade_path_agentwise = distances.mean(dim=-2)  # [b, num_paths, num_agents]
+            ade_agent_pathwise = rearrange(ade_path_agentwise, "b p a -> b a p")
+            ade_min = ade_agent_pathwise.min(dim=-1).values.mean()
+
+            fde_path_agentwise = distances[:, :, -1]  # [b, num_paths, num_agents]
+            fde_agent_pathwise = rearrange(fde_path_agentwise, "b p a -> b a p")
+            fde_min = fde_agent_pathwise.min(dim=-1).values.mean()
+
+            output_dict[f"jade_mean_{i+5}frames"] = jade_mean
+            output_dict[f"jade_min_{i+5}frames"] = jade_min
+            output_dict[f"jfde_mean_{i+5}frames"] = jfde_mean
+            output_dict[f"jfde_min_{i+5}frames"] = jfde_min
+            output_dict[f"ade_min_{i+5}frames"] = ade_min
+            output_dict[f"fde_min_{i+5}frames"] = fde_min
+
+        return output_dict
+
     def compute_jade_jfde(self, samples, y):
         """
         samples: [b, num_paths, t, a, 2]
@@ -492,25 +535,43 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         self.validation_kidxs += torch.bincount(
             k_idxs.flatten(), minlength=self.hparams.model.args.num_scenes
         ).cpu()
-        metric_dict = self.compute_jade_jfde(
-            samples_original_scale,
-            gt_path_original_scale[
-                :,
-                self.hparams.test.prefix_length : self.hparams.test.prefix_length
-                + self.hparams.test.max_length,
-            ],
-        )
-        record_step.update(metric_dict)
+        if getattr(self.hparams.test, "compute_multiple_of_5frames", False):
+            metric_dict = self.compute_metrics_multiple_of_5frames(
+                samples_original_scale,
+                gt_path_original_scale[
+                    :,
+                    self.hparams.test.prefix_length : self.hparams.test.prefix_length
+                    + self.hparams.test.max_length,
+                ],
+            )
+            record_step.update(metric_dict)
+        else:
+            metric_dict = self.compute_jade_jfde(
+                samples_original_scale,
+                gt_path_original_scale[
+                    :,
+                    self.hparams.test.prefix_length : self.hparams.test.prefix_length
+                    + self.hparams.test.max_length,
+                ],
+            )
+            record_step.update(metric_dict)
 
-        metric_dict = self.compute_ade_fde(
-            samples_original_scale,
-            gt_path_original_scale[
-                :,
-                self.hparams.test.prefix_length : self.hparams.test.prefix_length
-                + self.hparams.test.max_length,
-            ],
-        )
-        record_step.update(metric_dict)
+            metric_dict = self.compute_ade_fde(
+                samples_original_scale,
+                gt_path_original_scale[
+                    :,
+                    self.hparams.test.prefix_length : self.hparams.test.prefix_length
+                    + self.hparams.test.max_length,
+                ],
+            )
+            record_step.update(metric_dict)
+
+        if getattr(self.hparams.test, "feet2metre", False):
+            for key, value in record_step.items():
+                if "mean" in key:
+                    record_step[key] = value * 28.0 / 94.0
+                elif "min" in key:
+                    record_step[key] = value * 28.0 / 94.0
 
         self.log_dict(
             record_step,
