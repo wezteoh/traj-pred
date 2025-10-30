@@ -8,3 +8,6 @@ test:
   temperature: 1.0
   compute_multiple_of_5frames: true
   feet2metre: true
+  save_dir: ~/samples/nba50/test_samples
+  save_only: false
+  num_id_to_save: 128

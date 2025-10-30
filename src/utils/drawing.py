@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from imageio import mimsave
 from matplotlib.axes import Axes
+from matplotlib.collections import LineCollection
 from mplsoccer import Pitch
 
 """
@@ -1629,7 +1630,7 @@ def create_basketball_frame(pts: np.ndarray) -> np.ndarray:
     """
     fig, ax = plt.subplots(1, 1, figsize=(7.5, 4), dpi=32)
     court = Court(court_type="nba", origin="bottom-left", units="ft")
-    court.draw(ax=ax, showaxis=True)
+    court.draw(ax=ax, showaxis=False)
     for pt in pts[10:]:
         ax.scatter(pt[0], pt[1], color="red")
     for pt in pts[0:5]:
@@ -1728,3 +1729,105 @@ def create_video_from_frames(frames: list[np.ndarray], video_path: str, fps: int
     create a video from a list of frames
     """
     mimsave(video_path, frames, fps=fps)
+
+
+# ---------- styling helpers ----------
+COLOR_BALL = (0.85, 0.20, 0.18)  # red-ish
+COLOR_HOME = (0.15, 0.40, 0.85)  # blue-ish
+COLOR_AWAY = (0.10, 0.75, 0.35)  # green-ish
+
+
+def _fade_line(ax, xy, color, lw=2.2, alpha_min=0.15, alpha_max=1.0, z=3):
+    """
+    Draw polyline with segment-wise fading (start=alpha_min -> end=alpha_max).
+    xy: (T,2)
+    """
+    xy = np.asarray(xy, dtype=float)
+    if len(xy) < 2:
+        return
+    segs = np.concatenate([xy[:-1, None, :], xy[1:, None, :]], axis=1)  # (T-1, 2, 2)
+    n = segs.shape[0]
+    alphas = np.linspace(alpha_min, alpha_max, n)
+    rgba = np.tile((*color, 1.0), (n, 1))
+    rgba[:, 3] = alphas
+    lc = LineCollection(segs, colors=rgba, linewidths=lw, zorder=z, capstyle="round")
+    ax.add_collection(lc)
+
+
+def _end_marker(ax, xy, color, size=36, edge="white", edge_w=1.2, z=5):
+    if len(xy) == 0:
+        return
+    ax.scatter(
+        [xy[-1, 0]], [xy[-1, 1]], s=size, c=[color], edgecolor=edge, linewidths=edge_w, zorder=z
+    )
+
+
+def _direction_arrow(ax, xy, color, lw=1.8, z=4):
+    if len(xy) < 2:
+        return
+    p, q = xy[-2], xy[-1]
+    d = q - p
+    if float(np.linalg.norm(d)) < 1e-9:
+        return
+    ax.annotate("", xy=q, xytext=p, arrowprops=dict(arrowstyle="->", color=color, lw=lw), zorder=z)
+
+
+# ---------- main drawing ----------
+def draw_trajectories_on_court(
+    ax,
+    data: np.ndarray,
+    obs_len=None,  # int | None  number of "past" steps to render lighter
+    lw=2.2,
+):
+    """
+    Uses the existing axes (already containing the court) and overlays trajectories.
+    Coordinates must be in the SAME units/origin as your Court (typically feet).
+
+    Example players dict:
+    players = {
+        "home_23": {"xy": np.array([[x0,y0], ... [xT,yT]]), "team": "home"},
+        "away_7":  {"xy": np.array([...]),                   "team": "away"},
+    }
+    """
+
+    def _draw_one(xy, color):
+        xy = np.asarray(xy, dtype=float)
+        if obs_len is None or obs_len <= 1 or obs_len >= len(xy):
+            _fade_line(ax, xy, color, lw=lw, alpha_min=0.20, alpha_max=1.0)
+        else:
+            past, fut = xy[:obs_len], xy[obs_len:]
+            _fade_line(ax, past, color, lw=lw * 0.95, alpha_min=0.10, alpha_max=0.60)
+            _fade_line(ax, fut, color, lw=lw * 1.10, alpha_min=0.60, alpha_max=1.00)
+        _end_marker(ax, xy, color)
+        _direction_arrow(ax, xy, color)
+
+    # players
+    for player_idx in range(10):
+        player_data = data[:, player_idx, :]
+        color = COLOR_HOME if player_idx < 5 else COLOR_AWAY
+        _draw_one(player_data, color)
+
+    ball_data = data[:, 10, :]
+    _draw_one(ball_data, COLOR_BALL)
+
+
+def render_scene(
+    data: np.array,
+    court_type="nba",
+    origin="bottom-left",  # matches your example
+    units="ft",
+    orientation="h",  # "h", "v", "hl", "hr", "vu", "vd"
+    obs_len=None,
+    figsize=(7.5, 4),
+    dpi=200,
+    showaxis=False,
+    save_path=None,
+):
+    fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=dpi)
+    court = Court(court_type=court_type, origin=origin, units=units)
+    court.draw(ax=ax, orientation=orientation, showaxis=showaxis)
+    draw_trajectories_on_court(ax, data, obs_len=obs_len)
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)  # avoid memory leak
+    return fig, ax

@@ -3,6 +3,7 @@ from copy import deepcopy
 from mimetypes import init
 from pathlib import Path
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -145,6 +146,22 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             self.hparams.model.args.num_scenes,
             dtype=torch.long,
         )
+
+    def make_model_inputs(self, batch: torch.tensor):
+
+        batch_n = normalize(
+            batch,
+            self.data_mean,
+            self.data_std,
+        )
+        if self.hparams.interface.diff_in_input:
+            diff = torch.diff(batch, dim=1)
+            diff_n = normalize(diff, self.diff_mean, self.diff_std)
+            diff_n = torch.cat([torch.zeros_like(diff_n[:, :1]), diff_n], dim=1)
+            input_n = torch.cat([batch_n, diff_n], dim=-1)
+        else:
+            input_n = batch_n
+        return cast_floats_by_trainer_precision(input_n, precision=self.trainer.precision)
 
     def make_model_inputs_and_targets(self, batch: torch.tensor):
         if self.hparams.interface.diff_in_input or self.hparams.interface.diff_as_target:
@@ -522,8 +539,8 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
         }
 
     def test_step(self, batch, batch_idx):
-        x, y, gt_path_original_scale = self.make_model_inputs_and_targets(batch)
-
+        gt_path_original_scale = batch
+        x = self.make_model_inputs(batch)
         record_step = {}
 
         samples_original_scale, k_idxs = self.sample(
@@ -581,6 +598,21 @@ class AutoregressiveMultiplePathPredictionInterface(BasePredictionInterface):
             logger=True,
             add_dataloader_idx=False,
         )
+
+        if batch_idx == 0 and self.hparams.test.num_id_to_save > 0:
+            samples_original_scale_to_save = samples_original_scale[
+                : self.hparams.test.num_id_to_save,
+            ]
+            samples_original_scale_to_save = samples_original_scale_to_save.cpu().numpy()
+            save_dir = os.path.expanduser(self.hparams.test.save_dir)
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            np.save(
+                f"{os.path.expanduser(self.hparams.test.save_dir)}/samples.npy",
+                samples_original_scale_to_save,
+            )
+
+        if getattr(self.hparams.test, "save_only", False):
+            return None
 
         if batch_idx == 0 and self.hparams.test.num_id_to_upload > 0:
             sample_prefixes_original_scale = unnormalize(

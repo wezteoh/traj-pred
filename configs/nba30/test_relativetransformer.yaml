@@ -1,5 +1,5 @@
 test:
-  video_dir: ~/samples/nba30
+  video_dir: ~/samples/nba30/videos
   num_paths: 20
   prefix_length: 10
   max_length: 20
@@ -8,3 +8,6 @@ test:
   temperature: 1.0
   compute_multiple_of_5frames: true
   feet2metre: true
+  num_id_to_save: 128
+  save_dir: ~/samples/nba30/test_samples2
+  save_only: false
